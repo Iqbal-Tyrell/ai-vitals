@@ -69,9 +69,18 @@ pipeline rather than direct commits:
 4. GitHub's native Copilot code review (Balanced effort, requested
    automatically via a repo ruleset, re-runs on every push) reviews
    the PR inline.
-5. Any unresolved Copilot review comments trigger a fix-and-re-review
-   loop (capped at 5 rounds, then escalates via `needs-human-attention`).
-   A clean review applies `ready-for-merge`.
+5. A scheduled poller (every 10 minutes, or manually via
+   `workflow_dispatch`) checks unresolved Copilot review threads on
+   PRs carrying `needs-review` (polling because Copilot review runs
+   as an internal Actions workflow, so its events are subject to
+   GitHub's own GITHUB_TOKEN recursion-prevention rule and can't
+   trigger a listener directly). Unresolved findings start a
+   fix-and-re-review loop: a fresh `copilot -p` session verifies each
+   finding against the real code, fixes genuine issues or explains
+   false positives, replies directly to that finding's thread, and
+   resolves it. Capped at 5 rounds, then escalates via
+   `needs-human-attention`. Zero unresolved findings applies
+   `ready-for-merge`.
 6. Only a human ever clicks **Merge** — no pipeline step holds
    merge-capable permissions.
 
