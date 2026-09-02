@@ -47,12 +47,16 @@ jobs:
       - name: Locate final.md
         id: locate
         run: |
-          path=$(ocr state show --json | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\".ocr/sessions/{d.get('session_id') or d.get('sessionId')}/rounds/round-{d.get('current_round') or d.get('currentRound')}/final.md\") if d else sys.exit(1)")
+          set +e
+          # Primary: copilot was instructed to print the final.md path as its
+          # last output line - trust that first.
+          path=$(tail -n 5 /tmp/ocr-run-output.txt | grep -E '\.ocr/sessions/.*/final\.md' | tail -1 | tr -d '[:space:]')
           if [ -z "$path" ] || [ ! -f "$path" ]; then
-            # Fallback: most recently modified final.md anywhere in .ocr/sessions
-            path=$(find .ocr/sessions -name final.md -newer /tmp/ocr-run-output.txt -print 2>/dev/null | head -1)
+            # Fallback: ocr state show --json
+            path=$(ocr state show --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\".ocr/sessions/{d.get('session_id') or d.get('sessionId')}/rounds/round-{d.get('current_round') or d.get('currentRound')}/final.md\") if d else ''" 2>/dev/null)
           fi
           if [ -z "$path" ] || [ ! -f "$path" ]; then
+            # Fallback: most recently modified final.md anywhere in .ocr/sessions
             path=$(find .ocr/sessions -name final.md -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
           fi
           echo "Resolved final.md path: $path"
