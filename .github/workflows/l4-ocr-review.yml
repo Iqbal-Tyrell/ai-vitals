@@ -1,0 +1,178 @@
+name: L4 - OCR review
+
+# Runs multi-agent OCR review on PRs opened by the Build step (identified
+# by the `needs-review` label), then translates OCR's final.md into real,
+# resolvable inline GitHub review comments (the gap OCR's own /ocr-post
+# command doesn't close - it only posts a flat `gh pr comment`).
+
+on:
+  pull_request:
+    types: [opened, labeled, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  ocr-review:
+    if: contains(github.event.pull_request.labels.*.name, 'needs-review')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Install OCR + Copilot CLI
+        run: |
+          npm install -g @open-code-review/cli @github/copilot
+
+      - name: Run OCR multi-agent review
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          git fetch origin main
+          copilot -p "Read .ocr/skills/SKILL.md and follow its full 8-phase review workflow (see .ocr/skills/references/workflow.md) to review the diff between the current branch (HEAD) and origin/main. Use the default reviewer team. Run the setup guard first as instructed. Write the synthesized review to rounds/round-{n}/final.md under the appropriate .ocr/sessions/ directory and finalize it with 'ocr state complete-round', exactly as the skill instructs. Do not post anything to GitHub yourself - a separate step handles that. When finished, print only the path to the final.md file you produced, nothing else, on the last line of your output." \
+            --allow-all-tools \
+            --no-ask-user \
+            -s \
+            | tee /tmp/ocr-run-output.txt
+
+      - name: Locate final.md
+        id: locate
+        run: |
+          path=$(ocr state show --json | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\".ocr/sessions/{d.get('session_id') or d.get('sessionId')}/rounds/round-{d.get('current_round') or d.get('currentRound')}/final.md\") if d else sys.exit(1)")
+          if [ -z "$path" ] || [ ! -f "$path" ]; then
+            # Fallback: most recently modified final.md anywhere in .ocr/sessions
+            path=$(find .ocr/sessions -name final.md -newer /tmp/ocr-run-output.txt -print 2>/dev/null | head -1)
+          fi
+          if [ -z "$path" ] || [ ! -f "$path" ]; then
+            path=$(find .ocr/sessions -name final.md -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+          fi
+          echo "Resolved final.md path: $path"
+          if [ -z "$path" ] || [ ! -f "$path" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "path=$path" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Translate final.md into inline PR review + verdict
+        if: steps.locate.outputs.found == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const commit_id = context.payload.pull_request.head.sha;
+            const finalPath = '${{ steps.locate.outputs.path }}';
+            const text = fs.readFileSync(finalPath, 'utf8');
+
+            function section(name) {
+              const re = new RegExp(`^##\\s+${name}\\s*$`, 'm');
+              const m = re.exec(text);
+              if (!m) return '';
+              const rest = text.slice(m.index + m[0].length);
+              const next = rest.search(/^##\s+/m);
+              return next === -1 ? rest : rest.slice(0, next);
+            }
+
+            const verdictSection = section('Verdict');
+            let verdict = 'NEEDS DISCUSSION';
+            if (/\bREQUEST CHANGES\b/.test(verdictSection)) verdict = 'REQUEST CHANGES';
+            else if (/\bAPPROVE\b/.test(verdictSection)) verdict = 'APPROVE';
+
+            function parseItems(sectionText) {
+              const items = [];
+              const blocks = sectionText.split(/^###\s+/m).slice(1);
+              for (const block of blocks) {
+                const titleMatch = block.match(/^(.*)$/m);
+                const title = titleMatch ? titleMatch[1].trim() : '(untitled)';
+                const locMatch = block.match(/\*\*Location\*\*:\s*`([^`]+)`/);
+                let path = null, line = null;
+                if (locMatch) {
+                  const loc = locMatch[1];
+                  const m2 = loc.match(/^(.+?):(\d+)(?:-(\d+))?$/);
+                  if (m2) {
+                    path = m2[1];
+                    line = parseInt(m2[3] || m2[2], 10);
+                  }
+                }
+                const body = block
+                  .replace(/^.*$/m, '')
+                  .replace(/\*\*(Flagged by|Location|Type)\*\*:.*$/gm, '')
+                  .trim();
+                items.push({ title, path, line, body });
+              }
+              return items;
+            }
+
+            const blockers = parseItems(section('Blockers'));
+            const shouldFix = parseItems(section('Should Fix'));
+            const allItems = [...blockers, ...shouldFix];
+
+            const inlineComments = [];
+            const fallbackNotes = [];
+            for (const item of allItems) {
+              const commentBody = `**${item.title}**\n\n${item.body}`.trim();
+              if (item.path && item.line) {
+                inlineComments.push({ path: item.path, line: item.line, body: commentBody });
+              } else {
+                fallbackNotes.push(commentBody);
+              }
+            }
+
+            let summary = `## OCR Review\n\n**Verdict: ${verdict}**\n\n`;
+            summary += `${blockers.length} blocker(s), ${shouldFix.length} should-fix item(s).\n`;
+            if (fallbackNotes.length > 0) {
+              summary += `\n---\n\n_Findings without a parseable file:line location:_\n\n`;
+              summary += fallbackNotes.map((n) => `- ${n}`).join('\n\n');
+            }
+            summary += `\n\n_Full synthesized review: \`${finalPath}\`_`;
+
+            if (verdict === 'REQUEST CHANGES') {
+              await github.rest.pulls.createReview({
+                owner, repo, pull_number, commit_id,
+                event: 'REQUEST_CHANGES',
+                body: summary,
+                comments: inlineComments,
+              });
+            } else if (verdict === 'APPROVE') {
+              await github.rest.pulls.createReview({
+                owner, repo, pull_number, commit_id,
+                event: 'COMMENT', // never self-APPROVE - GitHub blocks this anyway
+                body: summary,
+                comments: inlineComments,
+              });
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: pull_number, labels: ['ready-for-merge'],
+              });
+            } else {
+              await github.rest.pulls.createReview({
+                owner, repo, pull_number, commit_id,
+                event: 'COMMENT',
+                body: summary,
+                comments: inlineComments,
+              });
+            }
+
+      - name: Report parse failure
+        if: steps.locate.outputs.found != 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: '_OCR review ran but no `final.md` could be located - see the workflow run logs._',
+            });
