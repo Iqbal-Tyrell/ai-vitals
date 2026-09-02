@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: "8.4"
+          extensions: mbstring, bcmath, pcntl, intl, zip, pdo_sqlite
+          coverage: none
+      - name: Copy .env
+        run: cp .env.example .env
+      - name: Install Composer dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+      - name: Generate app key
+        run: php artisan key:generate
+      - name: Create SQLite database
+        run: touch database/database.sqlite
+      - name: Run migrations
+        run: php artisan migrate --force
+      - name: Run tests (Pest via ParaTest)
+        run: vendor/bin/pest --parallel
+
+  analyse:
+    name: analyse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: "8.4"
+          extensions: mbstring, bcmath, pcntl, intl, zip, pdo_sqlite
+          coverage: none
+      - name: Copy .env
+        run: cp .env.example .env
+      - name: Install Composer dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+      - name: Generate app key
+        run: php artisan key:generate
+      - name: Run PHPStan (level 8)
+        run: vendor/bin/phpstan analyse --no-progress --memory-limit=512M
+
+  cs-check:
+    name: cs-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: "8.4"
+          coverage: none
+      - name: Install Composer dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+      - name: Run Pint (dry-run)
+        run: vendor/bin/pint --test
+
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: "8.4"
+          coverage: none
+      # Lockfile integrity: sequential guards before the audit itself.
+      - name: Validate composer.json
+        run: composer validate --strict
+      - name: Install Composer dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+      - name: Tripwire - composer.lock must not have changed
+        run: git diff --exit-code composer.lock
+      - name: Composer audit
+        run: composer audit
