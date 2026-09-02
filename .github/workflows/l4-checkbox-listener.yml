@@ -134,13 +134,47 @@ jobs:
             core.setOutput('run_build', String(runBuild));
             core.setOutput('issue_number', String(issue_number));
 
-      # --- Phase 1 stubs: Phase 2 replaces these with real OpenSpec/Copilot calls ---
-      - name: Run Plan (stub)
+      # --- Plan: read-only OpenSpec explore, posted as an issue comment ---
+      - name: Checkout (Plan)
+        if: steps.detect.outputs.run_plan == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Write issue context to file (avoids shell injection from issue body)
+        if: steps.detect.outputs.run_plan == 'true' || steps.detect.outputs.run_build == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const title = context.payload.issue.title;
+            const body = context.payload.issue.body ?? '';
+            fs.writeFileSync('/tmp/issue-context.md', `# ${title}\n\n${body}\n`);
+
+      - name: Install Copilot CLI (Plan)
+        if: steps.detect.outputs.run_plan == 'true'
+        run: npm install -g @github/copilot
+
+      - name: Run Plan (openspec explore)
+        if: steps.detect.outputs.run_plan == 'true'
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          copilot -p "Read .github/skills/openspec-explore/SKILL.md and follow its process to explore the issue described in the file /tmp/issue-context.md (read that file for the issue title and body). This step is thinking only - do not write, edit, or modify any code or files, and do not run any commands that change repository state. Output ONLY your final exploration writeup in markdown. Do not include any other commentary before or after it." \
+            --allow-tool='read' \
+            --no-ask-user \
+            -s \
+            > /tmp/plan-output.md
+          echo "--- plan output (first 80 lines) ---"
+          head -80 /tmp/plan-output.md
+
+      - name: Post Plan output
         if: steps.detect.outputs.run_plan == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
+            const fs = require('fs');
             const { owner, repo } = context.repo;
             const issue_number = Number('${{ steps.detect.outputs.issue_number }}');
             const comments = await github.paginate(github.rest.issues.listComments, {
@@ -150,19 +184,75 @@ jobs:
             if (running) {
               await github.rest.issues.deleteComment({ owner, repo, comment_id: running.id });
             }
+            let content = fs.readFileSync('/tmp/plan-output.md', 'utf8').trim();
+            const maxLen = 60000; // GitHub comment body limit is 65536
+            if (content.length > maxLen) {
+              content = content.slice(0, maxLen) + '\n\n_(truncated)_';
+            }
             await github.rest.issues.createComment({
               owner, repo, issue_number,
-              body: '<!-- l4:plan-output -->\n_(stub) Plan would run `openspec explore` here._',
+              body: '<!-- l4:plan-output -->\n' + content,
             });
 
-      - name: Run Build (stub)
+      # --- Build: OpenSpec propose -> apply, opens a PR ---
+      - name: Checkout (Build)
+        if: steps.detect.outputs.run_build == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Configure bot git identity and branch
+        if: steps.detect.outputs.run_build == 'true'
+        id: build-setup
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          slug="ai-vitals-bot"
+          bot_id=$(gh api "/users/${slug}[bot]" --jq .id)
+          git config user.name "${slug}[bot]"
+          git config user.email "${bot_id}+${slug}[bot]@users.noreply.github.com"
+          branch="l4/build-issue-${{ steps.detect.outputs.issue_number }}"
+          git checkout -B "$branch"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Install Copilot CLI (Build)
+        if: steps.detect.outputs.run_build == 'true'
+        run: npm install -g @github/copilot
+
+      - name: Run Build (openspec propose -> apply)
+        if: steps.detect.outputs.run_build == 'true'
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          copilot -p "Read .github/skills/openspec-propose/SKILL.md and .github/skills/openspec-apply-change/SKILL.md and follow their process end to end (propose then apply) to implement the issue described in the file /tmp/issue-context.md (read that file for the issue title and body). Make the actual code/config changes needed in this repository. Follow openspec/config.yaml's project context and this repo's existing conventions (Laravel 13 + Filament, Pest, Larastan level 8, Pint). When finished, write one paragraph summarizing what you changed and why to /tmp/build-summary.md - nothing else in that file." \
+            --allow-all-tools \
+            --no-ask-user \
+            -s
+
+      - name: Commit and push (if there are changes)
+        if: steps.detect.outputs.run_build == 'true'
+        id: build-commit
+        run: |
+          if git diff --quiet && git diff --cached --quiet && [ -z "$(git status --porcelain)" ]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            git add -A
+            git commit -m "Build: issue #${{ steps.detect.outputs.issue_number }}"
+            git push origin "${{ steps.build-setup.outputs.branch }}" --force
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR and report
         if: steps.detect.outputs.run_build == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
+            const fs = require('fs');
             const { owner, repo } = context.repo;
             const issue_number = Number('${{ steps.detect.outputs.issue_number }}');
+            const hasChanges = '${{ steps.build-commit.outputs.has_changes }}' === 'true';
+
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number, per_page: 100,
             });
@@ -170,7 +260,38 @@ jobs:
             if (running) {
               await github.rest.issues.deleteComment({ owner, repo, comment_id: running.id });
             }
+
+            if (!hasChanges) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number,
+                body: '<!-- l4:build-output -->\n_Build ran but made no changes - nothing to open a PR for._',
+              });
+              return;
+            }
+
+            const summary = fs.existsSync('/tmp/build-summary.md')
+              ? fs.readFileSync('/tmp/build-summary.md', 'utf8').trim()
+              : '(no summary provided)';
+
+            const issue = await github.rest.issues.get({ owner, repo, issue_number });
+            const bumpLabel = issue.data.labels
+              .map((l) => (typeof l === 'string' ? l : l.name))
+              .find((n) => n && n.startsWith('bump:')) || 'bump:patch';
+
+            const pr = await github.rest.pulls.create({
+              owner, repo,
+              title: issue.data.title,
+              head: '${{ steps.build-setup.outputs.branch }}',
+              base: 'main',
+              body: `Closes #${issue_number}\n\n${summary}`,
+            });
+
+            await github.rest.issues.addLabels({
+              owner, repo, issue_number: pr.data.number,
+              labels: [bumpLabel, 'needs-review'],
+            });
+
             await github.rest.issues.createComment({
               owner, repo, issue_number,
-              body: '<!-- l4:build-output -->\n_(stub) Build would run `openspec propose -> apply` and open a PR here._',
+              body: `<!-- l4:build-output -->\nOpened #${pr.data.number}.`,
             });
