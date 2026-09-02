@@ -1,0 +1,41 @@
+name: Smoke test - copilot CLI + bot identity
+
+# Manual, one-off validation that the L4 auth chain actually works:
+# App installation token (bot identity) + COPILOT_GITHUB_TOKEN (Copilot
+# CLI, billed to the maintainer's subscription seat). Not part of the
+# permanent L4 pipeline - delete once L4 is proven working end-to-end.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Verify bot identity token works (gh api /app comment as bot)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh api /repos/${{ github.repository }} --jq '.full_name'
+          echo "Bot identity token: OK"
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Run copilot -p (Copilot Requests PAT)
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          copilot -p "Reply with exactly: SMOKE_TEST_OK" --allow-all-tools
