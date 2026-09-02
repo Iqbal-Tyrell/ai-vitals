@@ -1,28 +1,67 @@
 name: L4 - Copilot review fix-loop
 
-# Reacts to GitHub's native Copilot code review on PRs carrying the
-# needs-review label. Confirmed live that the review-submission event
-# (pull_request_review) does NOT fire a triggerable Actions event for
-# Copilot's automated reviews (zero such runs ever appeared, across
-# multiple real test reviews) - so this triggers on the check_run it
-# does reliably produce (name: copilot-pull-request-reviewer) instead.
-# That check-run's conclusion is always "success" regardless of
-# findings (it only reflects "the review ran", not "the code is
+# Polls (rather than reacts to an event) for native GitHub Copilot code
+# review's outcome on PRs carrying the needs-review label. Confirmed
+# live, twice, that neither pull_request_review nor check_run fire a
+# triggerable Actions event for Copilot's automated reviews: it runs as
+# an internal Actions workflow in this repo, so everything it posts
+# inherits GitHub's own GITHUB_TOKEN recursion-prevention rule ("events
+# triggered using the repository's GITHUB_TOKEN will not create a new
+# workflow run") - not fixable by choosing a different event type.
+#
+# Copilot review's check-run conclusion is always "success" regardless
+# of findings (it only reflects "the review ran", not "the code is
 # clean"), so the real signal is whether it left any UNRESOLVED
 # review-comment threads (verified via GraphQL reviewThreads.isResolved).
 # Capped at 5 rounds via a round marker comment; escalates to
 # needs-human-attention rather than looping forever.
 
 on:
-  check_run:
-    types: [completed]
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  list-prs:
+    runs-on: ubuntu-latest
+    outputs:
+      prs: ${{ steps.list.outputs.prs }}
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: List open PRs awaiting review, not already escalated
+        id: list
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            const eligible = prs
+              .filter((p) => {
+                const labels = p.labels.map((l) => l.name);
+                return labels.includes('needs-review') && !labels.includes('needs-human-attention');
+              })
+              .map((p) => p.number);
+            core.setOutput('prs', JSON.stringify(eligible));
+            core.info(`Eligible PRs: ${JSON.stringify(eligible)}`);
+
   fix-loop:
-    if: github.event.check_run.name == 'copilot-pull-request-reviewer'
+    needs: list-prs
+    if: needs.list-prs.outputs.prs != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        pull_number: ${{ fromJSON(needs.list-prs.outputs.prs) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -38,30 +77,9 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const { owner, repo } = context.repo;
-
-            // check_run's pull_requests array is populated for same-repo
-            // PRs; fall back to the commit-search endpoint if it's empty.
-            let pull_number = context.payload.check_run.pull_requests[0]?.number;
-            if (!pull_number) {
-              const sha = context.payload.check_run.head_sha;
-              const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                owner, repo, commit_sha: sha,
-              });
-              pull_number = prs.data.find((p) => p.state === 'open')?.number;
-            }
-            if (!pull_number) {
-              core.info('No open PR associated with this check run - skipping.');
-              core.setOutput('skip', 'true');
-              return;
-            }
+            const pull_number = ${{ matrix.pull_number }};
 
             const pr = await github.rest.pulls.get({ owner, repo, pull_number });
-            const labels = pr.data.labels.map((l) => l.name);
-            if (!labels.includes('needs-review') || labels.includes('needs-human-attention')) {
-              core.info('PR does not carry needs-review, or already escalated - skipping.');
-              core.setOutput('skip', 'true');
-              return;
-            }
 
             const query = `
               query($owner: String!, $repo: String!, $pr: Int!) {
@@ -94,10 +112,8 @@ jobs:
               if (m) round = Math.max(round, parseInt(m[1], 10));
             }
 
-            core.setOutput('skip', 'false');
             core.setOutput('unresolved_count', String(unresolved.length));
             core.setOutput('round', String(round));
-            core.setOutput('pull_number', String(pull_number));
             core.setOutput('head_ref', pr.data.head.ref);
 
             const fs = require('fs');
@@ -107,13 +123,13 @@ jobs:
             }).join('\n\n'));
 
       - name: Mark ready-for-merge (no unresolved findings)
-        if: steps.check.outputs.skip != 'true' && steps.check.outputs.unresolved_count == '0'
+        if: steps.check.outputs.unresolved_count == '0'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const { owner, repo } = context.repo;
-            const issue_number = Number('${{ steps.check.outputs.pull_number }}');
+            const issue_number = ${{ matrix.pull_number }};
             await github.rest.issues.addLabels({ owner, repo, issue_number, labels: ['ready-for-merge'] });
             try {
               await github.rest.issues.removeLabel({ owner, repo, issue_number, name: 'needs-review' });
@@ -122,13 +138,13 @@ jobs:
             }
 
       - name: Escalate (5-round cap reached)
-        if: steps.check.outputs.skip != 'true' && steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) >= 5
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) >= 5
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const { owner, repo } = context.repo;
-            const issue_number = Number('${{ steps.check.outputs.pull_number }}');
+            const issue_number = ${{ matrix.pull_number }};
             await github.rest.issues.addLabels({ owner, repo, issue_number, labels: ['needs-human-attention'] });
             await github.rest.issues.createComment({
               owner, repo, issue_number,
@@ -136,14 +152,14 @@ jobs:
             });
 
       - name: Checkout PR branch (fix round)
-        if: steps.check.outputs.skip != 'true' && steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ steps.app-token.outputs.token }}
           ref: ${{ steps.check.outputs.head_ref }}
 
       - name: Configure bot git identity
-        if: steps.check.outputs.skip != 'true' && steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -153,11 +169,11 @@ jobs:
           git config user.email "${bot_id}+${slug}[bot]@users.noreply.github.com"
 
       - name: Install Copilot CLI
-        if: steps.check.outputs.skip != 'true' && steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
         run: npm install -g @github/copilot
 
       - name: Fix unresolved findings
-        if: steps.check.outputs.skip != 'true' && steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
@@ -167,7 +183,7 @@ jobs:
             -s
 
       - name: Commit and push fix
-        if: steps.check.outputs.skip != 'true' && steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
         id: commit
         run: |
           if [ -z "$(git status --porcelain)" ]; then
@@ -180,20 +196,20 @@ jobs:
           fi
 
       - name: Report fix round
-        if: steps.check.outputs.skip != 'true' && steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const fs = require('fs');
             const { owner, repo } = context.repo;
-            const issue_number = Number('${{ steps.check.outputs.pull_number }}');
+            const issue_number = ${{ matrix.pull_number }};
             const nextRound = Number('${{ steps.check.outputs.round }}') + 1;
             const hasChanges = '${{ steps.commit.outputs.has_changes }}' === 'true';
             const summary = fs.existsSync('/tmp/fix-summary.md')
               ? fs.readFileSync('/tmp/fix-summary.md', 'utf8').trim()
               : '(no summary provided)';
             const body = hasChanges
-              ? `<!-- l4:fix-round:${nextRound} -->\n**Fix round ${nextRound}/5**\n\n${summary}\n\n_Pushed a fix commit - Copilot will re-review automatically._`
+              ? `<!-- l4:fix-round:${nextRound} -->\n**Fix round ${nextRound}/5**\n\n${summary}\n\n_Pushed a fix commit - Copilot will re-review automatically; the next poll will pick up its result._`
               : `<!-- l4:fix-round:${nextRound} -->\n**Fix round ${nextRound}/5**\n\n${summary}\n\n_No changes were made (all findings judged false-positive, or already addressed)._`;
             await github.rest.issues.createComment({ owner, repo, issue_number, body });
