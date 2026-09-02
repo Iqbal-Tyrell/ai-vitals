@@ -50,9 +50,9 @@ Before adding one, check and be prepared to state:
 | Label | Meaning |
 |---|---|
 | `bump:patch` / `bump:minor` / `bump:major` | Which release bucket a merged PR lands in |
-| `ready-for-merge` | OCR review is clean; a human may click Merge |
+| `ready-for-merge` | Review is clean; a human may click Merge |
 | `milestone-triage-pending` | Awaiting human approval for milestone triage |
-| `needs-review` | Awaiting OCR or human code review |
+| `needs-review` | Awaiting Copilot or human code review |
 | `needs-human-attention` | The L4 fix-loop hit its 5-round cap and escalated |
 | `bug` / `enhancement` / `documentation` | Baseline classification |
 
@@ -66,11 +66,12 @@ pipeline rather than direct commits:
    comment (thinking only, no code).
 3. Checking **Build** runs OpenSpec `propose -> apply` (using Laravel
    Boost's MCP server to see the app's real schema) and opens a PR.
-4. A multi-agent OCR review runs against the PR, producing inline
-   GitHub review comments with a formal verdict.
-5. `REQUEST_CHANGES` triggers a fix-and-re-review loop (capped at 5
-   rounds, then escalates via `needs-human-attention`). A clean verdict
-   applies `ready-for-merge`.
+4. GitHub's native Copilot code review (Balanced effort, requested
+   automatically via a repo ruleset, re-runs on every push) reviews
+   the PR inline.
+5. Any unresolved Copilot review comments trigger a fix-and-re-review
+   loop (capped at 5 rounds, then escalates via `needs-human-attention`).
+   A clean review applies `ready-for-merge`.
 6. Only a human ever clicks **Merge** — no pipeline step holds
    merge-capable permissions.
 
