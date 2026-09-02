@@ -8,21 +8,20 @@ services:
     volumes:
       - app-storage:/app/storage
       - app-database:/app/database
-    env_file:
-      - .env
     environment:
-      - APP_URL=http://localhost:8080
+      - RUN_MIGRATIONS=true
     healthcheck:
-      test: ["CMD", "php", "artisan", "about", "--only=environment"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/"]
       interval: 10s
       timeout: 5s
-      retries: 5
-    command: >
-      sh -c "php artisan migrate --force &&
-             php artisan serve --host=0.0.0.0 --port=8080"
+      retries: 10
+      start_period: 20s
+    command: ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8080"]
 
   # Runs the Laravel scheduler continuously, so scan-rebuild's scheduled
   # trigger (see data-layer plan) fires without relying on host cron.
+  # Waits for app's healthcheck so it never races app's .env/APP_KEY
+  # bootstrap or first migration.
   scheduler:
     build:
       context: .
@@ -30,10 +29,11 @@ services:
     volumes:
       - app-storage:/app/storage
       - app-database:/app/database
-    env_file:
-      - .env
+    environment:
+      - RUN_MIGRATIONS=false
     depends_on:
-      - app
+      app:
+        condition: service_healthy
     command: ["php", "artisan", "schedule:work"]
 
 volumes:

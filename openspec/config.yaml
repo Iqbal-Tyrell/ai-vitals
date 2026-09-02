@@ -1,0 +1,51 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+context: |
+  ai-vitals: a local, single-user, cross-AI-provider usage/cost dashboard.
+  Detects and scans local AI coding tool logs (Copilot CLI, Claude Code,
+  Codex CLI) and displays usage/cost analytics.
+
+  Tech stack: Laravel 13 + Filament 4 (admin panel at /admin), PHP 8.4.
+  Testing: Pest 4 (via ParaTest, parallel). Static analysis: Larastan/
+  PHPStan level 8. Style: Laravel Pint. Distribution: Docker Compose only
+  (docker compose up -d -> localhost:8080). See SETUP.md/CONTRIBUTING.md.
+
+  Data layer: a single SQLite database. Laravel's own operational tables
+  (users, sessions, jobs, migrations) and provider-scanned usage-data
+  tables share this one file. Provider-scanned tables are fully disposable
+  and rebuilt via `php artisan vitals:scan` (scoped truncate+reinsert of
+  ai-vitals' own tables only - never migrate:fresh/db:wipe). Cache driver
+  is `file`, not `database` (avoids SQLite write-lock contention with the
+  scan-rebuild).
+
+  Provider plugin contract: each provider is a class in app/Provider/
+  implementing detect()/scan() as always-separate calls. detect() is a
+  cheap existence check; scan() does the actual parsing and must never
+  throw on a single malformed/partial log row - skip that row, record it
+  in a $warnings collection, keep processing the rest.
+
+  Architecture: Filament Resources/Widgets stay thin (parse/delegate
+  only); business logic lives in app/Service/ classes.
+
+  Determinism rules: no `mixed` return/param types without an inline
+  justification comment; providers RETURN warnings (never throw), the
+  API/Resource layer THROWS typed exceptions for genuine failures; no
+  implicit type coercion in aggregation math (cast to float/int at the
+  parsing boundary).
+
+  Doc-comment policy (PHPDoc, mandatory): exactly one sentence describing
+  purpose (not mechanism), @param one-liner per parameter, @return always
+  present, @throws only when the function can actually throw.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours

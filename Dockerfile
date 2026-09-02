@@ -24,8 +24,10 @@ RUN composer install --no-dev --no-scripts --no-interaction --prefer-dist --no-a
 COPY . .
 RUN composer dump-autoload --optimize \
     && mkdir -p database \
-    && touch database/database.sqlite
+    && touch database/database.sqlite \
+    && chmod +x docker/entrypoint.sh
 
 EXPOSE 8080
 
+ENTRYPOINT ["docker/entrypoint.sh"]
 CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8080"]
