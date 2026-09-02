@@ -1,0 +1,173 @@
+name: L4 - Copilot review fix-loop
+
+# Reacts to GitHub's native Copilot code review on PRs carrying the
+# needs-review label. Since Copilot review's check-run conclusion is
+# always "success" (it only reflects "the review ran", not "the code is
+# clean") and its formal review.state is always COMMENTED, the real
+# signal is whether it left any UNRESOLVED review-comment threads
+# (verified via GraphQL reviewThreads.isResolved). Capped at 5 rounds
+# via a round marker comment; escalates to needs-human-attention rather
+# than looping forever.
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+
+jobs:
+  fix-loop:
+    if: >
+      contains(github.event.review.user.login, 'copilot-pull-request-reviewer') &&
+      contains(github.event.pull_request.labels.*.name, 'needs-review') &&
+      !contains(github.event.pull_request.labels.*.name, 'needs-human-attention')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Check unresolved Copilot review threads + round count
+        id: check
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+
+            const query = `
+              query($owner: String!, $repo: String!, $pr: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $pr) {
+                    reviewThreads(first: 100) {
+                      nodes {
+                        isResolved
+                        comments(first: 1) {
+                          nodes { author { login } path line body }
+                        }
+                      }
+                    }
+                  }
+                }
+              }`;
+            const result = await github.graphql(query, { owner, repo, pr: pull_number });
+            const threads = result.repository.pullRequest.reviewThreads.nodes;
+            const unresolved = threads.filter((t) => {
+              const first = t.comments.nodes[0];
+              return !t.isResolved && first && first.author && first.author.login.includes('copilot-pull-request-reviewer');
+            });
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pull_number, per_page: 100,
+            });
+            let round = 0;
+            for (const c of comments) {
+              const m = c.body.match(/<!-- l4:fix-round:(\d+) -->/);
+              if (m) round = Math.max(round, parseInt(m[1], 10));
+            }
+
+            core.setOutput('unresolved_count', String(unresolved.length));
+            core.setOutput('round', String(round));
+            core.setOutput('pull_number', String(pull_number));
+
+            const fs = require('fs');
+            fs.writeFileSync('/tmp/unresolved-findings.md', unresolved.map((t, i) => {
+              const c = t.comments.nodes[0];
+              return `### Finding ${i + 1}\n**Location**: \`${c.path}:${c.line}\`\n\n${c.body}`;
+            }).join('\n\n'));
+
+      - name: Mark ready-for-merge (no unresolved findings)
+        if: steps.check.outputs.unresolved_count == '0'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = Number('${{ steps.check.outputs.pull_number }}');
+            await github.rest.issues.addLabels({ owner, repo, issue_number, labels: ['ready-for-merge'] });
+            try {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number, name: 'needs-review' });
+            } catch (e) {
+              core.info(`needs-review label not present or already removed: ${e.message}`);
+            }
+
+      - name: Escalate (5-round cap reached)
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) >= 5
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = Number('${{ steps.check.outputs.pull_number }}');
+            await github.rest.issues.addLabels({ owner, repo, issue_number, labels: ['needs-human-attention'] });
+            await github.rest.issues.createComment({
+              owner, repo, issue_number,
+              body: '_Fix-loop hit its 5-round cap with unresolved Copilot review findings still open. Escalating to a human - no further automated fix attempts will run on this PR._',
+            });
+
+      - name: Checkout PR branch (fix round)
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Configure bot git identity
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          slug="ai-vitals-bot"
+          bot_id=$(gh api "/users/${slug}[bot]" --jq .id)
+          git config user.name "${slug}[bot]"
+          git config user.email "${bot_id}+${slug}[bot]@users.noreply.github.com"
+
+      - name: Install Copilot CLI
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        run: npm install -g @github/copilot
+
+      - name: Fix unresolved findings
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          copilot -p "GitHub's native Copilot code review left unresolved findings on this PR, listed in /tmp/unresolved-findings.md (read that file - each has a Location: file:line and description). For each finding: first verify it is a real issue by reading the actual code at that location yourself - do not blindly apply a fix without checking. If it is a genuine issue, fix it. If you determine it is a false positive, leave the code as-is and explain why in your summary. Follow this repo's existing conventions (Laravel 13 + Filament, Pest, Larastan level 8, Pint). Run the project's own validation (pest, phpstan, pint) before finishing if applicable. Write a one-paragraph summary of what you did (fixed vs judged false-positive, with brief reasoning) to /tmp/fix-summary.md - nothing else in that file." \
+            --allow-all-tools \
+            --no-ask-user \
+            -s
+
+      - name: Commit and push fix
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        id: commit
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            git add -A
+            git commit -m "Fix: address Copilot review round ${{ steps.check.outputs.round }}"
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report fix round
+        if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const issue_number = Number('${{ steps.check.outputs.pull_number }}');
+            const nextRound = Number('${{ steps.check.outputs.round }}') + 1;
+            const hasChanges = '${{ steps.commit.outputs.has_changes }}' === 'true';
+            const summary = fs.existsSync('/tmp/fix-summary.md')
+              ? fs.readFileSync('/tmp/fix-summary.md', 'utf8').trim()
+              : '(no summary provided)';
+            const body = hasChanges
+              ? `<!-- l4:fix-round:${nextRound} -->\n**Fix round ${nextRound}/5**\n\n${summary}\n\n_Pushed a fix commit - Copilot will re-review automatically._`
+              : `<!-- l4:fix-round:${nextRound} -->\n**Fix round ${nextRound}/5**\n\n${summary}\n\n_No changes were made (all findings judged false-positive, or already addressed)._`;
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
