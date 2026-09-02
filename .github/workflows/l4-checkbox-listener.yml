@@ -1,0 +1,176 @@
+name: L4 - checkbox listener
+
+# Reacts to edits on the bot's own gate comments (detected via a hidden
+# HTML-comment marker + native GitHub task-list checkboxes). GitHub has
+# no native "checkbox toggled" event, so this diffs the edited comment's
+# body against `changes.body.from` to find unchecked -> checked
+# transitions per labeled line.
+
+on:
+  issue_comment:
+    types: [edited]
+
+permissions:
+  contents: read
+
+jobs:
+  handle-checkbox:
+    if: github.event.comment.performed_via_github_app.slug == 'ai-vitals-bot' || github.event.comment.user.login == 'ai-vitals-bot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Detect checkbox transitions and act
+        id: detect
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.issue.number;
+            const commentBody = context.payload.comment.body;
+            const previousBody = context.payload.changes?.body?.from ?? '';
+
+            function isChecked(body, label) {
+              const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const re = new RegExp('- \\[( |x)\\]\\s*' + escaped);
+              const m = body.match(re);
+              return m ? m[1] === 'x' : null;
+            }
+
+            function wasJustChecked(label) {
+              return isChecked(previousBody, label) === false
+                && isChecked(commentBody, label) === true;
+            }
+
+            async function commentExists(marker) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number, per_page: 100,
+              });
+              return comments.some((c) => c.body.includes(marker));
+            }
+
+            // --- Triage-gate comment: single-shot, posts Plan/Build gate ---
+            if (commentBody.includes('<!-- l4:triage-gate -->')) {
+              if (wasJustChecked('Approve for milestone triage')) {
+                if (await commentExists('<!-- l4:plan-build-gate -->')) {
+                  core.info('Plan/Build gate already posted; skipping.');
+                } else {
+                  await github.rest.issues.createComment({
+                    owner, repo, issue_number,
+                    body: ['<!-- l4:plan-build-gate -->', '- [ ] Plan', '- [ ] Build'].join('\n'),
+                  });
+                }
+              }
+              core.setOutput('run_plan', 'false');
+              core.setOutput('run_build', 'false');
+              return;
+            }
+
+            // --- Plan/Build gate comment: self-resetting, idempotent ---
+            if (!commentBody.includes('<!-- l4:plan-build-gate -->')) {
+              core.setOutput('run_plan', 'false');
+              core.setOutput('run_build', 'false');
+              return;
+            }
+
+            const planChecked = wasJustChecked('Plan');
+            const buildChecked = wasJustChecked('Build');
+
+            if (planChecked || buildChecked) {
+              let newBody = commentBody;
+              if (planChecked) newBody = newBody.replace(/- \[x\]\s*Plan/, '- [ ] Plan');
+              if (buildChecked) newBody = newBody.replace(/- \[x\]\s*Build/, '- [ ] Build');
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: context.payload.comment.id, body: newBody,
+              });
+            }
+
+            let runPlan = false;
+            if (planChecked) {
+              const running = await commentExists('<!-- l4:plan-running -->');
+              const done = await commentExists('<!-- l4:plan-output -->');
+              if (running || done) {
+                core.info('Plan already exists or is running; ignoring re-check.');
+              } else {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number,
+                  body: '<!-- l4:plan-running -->\n_Plan is running..._',
+                });
+                runPlan = true;
+              }
+            }
+
+            let runBuild = false;
+            if (buildChecked) {
+              const timeline = await github.paginate(github.rest.issues.listEventsForTimeline, {
+                owner, repo, issue_number, per_page: 100,
+              });
+              let blocked = false;
+              for (const ev of timeline) {
+                if (ev.event !== 'cross-referenced') continue;
+                if (!ev.source?.issue?.pull_request) continue;
+                const prNumber = ev.source.issue.number;
+                const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+                if (pr.data.state === 'open' || pr.data.merged) blocked = true;
+              }
+              const running = await commentExists('<!-- l4:build-running -->');
+              if (blocked || running) {
+                core.info('Build PR already open/merged or running; ignoring re-check.');
+              } else {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number,
+                  body: '<!-- l4:build-running -->\n_Build is running..._',
+                });
+                runBuild = true;
+              }
+            }
+
+            core.setOutput('run_plan', String(runPlan));
+            core.setOutput('run_build', String(runBuild));
+            core.setOutput('issue_number', String(issue_number));
+
+      # --- Phase 1 stubs: Phase 2 replaces these with real OpenSpec/Copilot calls ---
+      - name: Run Plan (stub)
+        if: steps.detect.outputs.run_plan == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = Number('${{ steps.detect.outputs.issue_number }}');
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const running = comments.find((c) => c.body.includes('<!-- l4:plan-running -->'));
+            if (running) {
+              await github.rest.issues.deleteComment({ owner, repo, comment_id: running.id });
+            }
+            await github.rest.issues.createComment({
+              owner, repo, issue_number,
+              body: '<!-- l4:plan-output -->\n_(stub) Plan would run `openspec explore` here._',
+            });
+
+      - name: Run Build (stub)
+        if: steps.detect.outputs.run_build == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = Number('${{ steps.detect.outputs.issue_number }}');
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const running = comments.find((c) => c.body.includes('<!-- l4:build-running -->'));
+            if (running) {
+              await github.rest.issues.deleteComment({ owner, repo, comment_id: running.id });
+            }
+            await github.rest.issues.createComment({
+              owner, repo, issue_number,
+              body: '<!-- l4:build-output -->\n_(stub) Build would run `openspec propose -> apply` and open a PR here._',
+            });
