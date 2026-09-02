@@ -1,4 +1,4 @@
-name: L4 - issue opened
+name: Issue opened
 
 on:
   issues:

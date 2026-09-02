@@ -1,4 +1,4 @@
-name: L4 - checkbox listener
+name: Checkbox listener
 
 # Reacts to edits on the bot's own gate comments (detected via a hidden
 # HTML-comment marker + native GitHub task-list checkboxes). GitHub has

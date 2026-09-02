@@ -1,4 +1,4 @@
-name: L4 - Copilot review fix-loop
+name: Copilot review fix-loop
 
 # Polls (rather than reacts to an event) for native GitHub Copilot code
 # review's outcome on PRs carrying the needs-review label. Confirmed
@@ -87,9 +87,10 @@ jobs:
                   pullRequest(number: $pr) {
                     reviewThreads(first: 100) {
                       nodes {
+                        id
                         isResolved
                         comments(first: 1) {
-                          nodes { author { login } path line body }
+                          nodes { databaseId author { login } path line body }
                         }
                       }
                     }
@@ -117,6 +118,15 @@ jobs:
             core.setOutput('head_ref', pr.data.head.ref);
 
             const fs = require('fs');
+            // Manifest maps each finding's index back to its GraphQL thread id
+            // (for resolveReviewThread) and REST comment databaseId (for
+            // posting a threaded reply) - copilot only sees the findings file.
+            const manifest = unresolved.map((t, i) => ({
+              index: i + 1,
+              threadId: t.id,
+              commentDatabaseId: t.comments.nodes[0].databaseId,
+            }));
+            fs.writeFileSync('/tmp/findings-manifest.json', JSON.stringify(manifest));
             fs.writeFileSync('/tmp/unresolved-findings.md', unresolved.map((t, i) => {
               const c = t.comments.nodes[0];
               return `### Finding ${i + 1}\n**Location**: \`${c.path}:${c.line}\`\n\n${c.body}`;
@@ -177,7 +187,7 @@ jobs:
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
-          copilot -p "GitHub's native Copilot code review left unresolved findings on this PR, listed in /tmp/unresolved-findings.md (read that file - each has a Location: file:line and description). For each finding: first verify it is a real issue by reading the actual code at that location yourself - do not blindly apply a fix without checking. If it is a genuine issue, fix it. If you determine it is a false positive, leave the code as-is and explain why in your summary. Follow this repo's existing conventions (Laravel 13 + Filament, Pest, Larastan level 8, Pint). Run the project's own validation (pest, phpstan, pint) before finishing if applicable. Write a one-paragraph summary of what you did (fixed vs judged false-positive, with brief reasoning) to /tmp/fix-summary.md - nothing else in that file." \
+          copilot -p "GitHub's native Copilot code review left unresolved findings on this PR, listed in /tmp/unresolved-findings.md (read that file - each has a numbered Finding heading with a Location: file:line and description). For EVERY numbered finding: first verify it is a real issue by reading the actual code at that location yourself - do not blindly apply a fix without checking. If it is a genuine issue, fix it. If you determine it is a false positive, leave the code as-is and explain why. Follow this repo's existing conventions (Laravel 13 + Filament, Pest, Larastan level 8, Pint). Run the project's own validation (pest, phpstan, pint) before finishing if applicable. Then write a JSON array to /tmp/fix-results.json - nothing else in that file - with exactly one object per finding, in this exact shape: [{\"index\": 1, \"addressed\": true, \"reply\": \"one to three sentences explaining what you did or why it's a false positive, suitable as a direct reply to the reviewer comment\"}, ...]. The index must match the finding's number exactly." \
             --allow-all-tools \
             --no-ask-user \
             -s
@@ -186,16 +196,17 @@ jobs:
         if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
         id: commit
         run: |
+          next_round=$(( ${{ steps.check.outputs.round }} + 1 ))
           if [ -z "$(git status --porcelain)" ]; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
             git add -A
-            git commit -m "Fix: address Copilot review round ${{ steps.check.outputs.round }}"
+            git commit -m "Fix: address Copilot review round ${next_round}"
             git push origin HEAD:${{ steps.check.outputs.head_ref }}
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Report fix round
+      - name: Reply to each review thread and resolve it
         if: steps.check.outputs.unresolved_count != '0' && fromJSON(steps.check.outputs.round) < 5
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
@@ -203,13 +214,41 @@ jobs:
           script: |
             const fs = require('fs');
             const { owner, repo } = context.repo;
-            const issue_number = ${{ matrix.pull_number }};
+            const pull_number = ${{ matrix.pull_number }};
             const nextRound = Number('${{ steps.check.outputs.round }}') + 1;
             const hasChanges = '${{ steps.commit.outputs.has_changes }}' === 'true';
-            const summary = fs.existsSync('/tmp/fix-summary.md')
-              ? fs.readFileSync('/tmp/fix-summary.md', 'utf8').trim()
-              : '(no summary provided)';
+
+            const manifest = JSON.parse(fs.readFileSync('/tmp/findings-manifest.json', 'utf8'));
+            let results = [];
+            try {
+              results = JSON.parse(fs.readFileSync('/tmp/fix-results.json', 'utf8'));
+            } catch (e) {
+              core.warning(`Could not parse fix-results.json: ${e.message}`);
+            }
+
+            for (const entry of manifest) {
+              const result = results.find((r) => r.index === entry.index);
+              const replyBody = result?.reply || 'Reviewed - see the fix-round summary comment below for details.';
+              try {
+                await github.rest.pulls.createReplyForReviewComment({
+                  owner, repo, pull_number,
+                  comment_id: entry.commentDatabaseId,
+                  body: replyBody,
+                });
+              } catch (e) {
+                core.warning(`Failed to reply to comment ${entry.commentDatabaseId}: ${e.message}`);
+              }
+              try {
+                await github.graphql(
+                  `mutation($threadId: ID!) { resolveReviewThread(input: { threadId: $threadId }) { thread { id } } }`,
+                  { threadId: entry.threadId },
+                );
+              } catch (e) {
+                core.warning(`Failed to resolve thread ${entry.threadId}: ${e.message}`);
+              }
+            }
+
             const body = hasChanges
-              ? `<!-- l4:fix-round:${nextRound} -->\n**Fix round ${nextRound}/5**\n\n${summary}\n\n_Pushed a fix commit - Copilot will re-review automatically; the next poll will pick up its result._`
-              : `<!-- l4:fix-round:${nextRound} -->\n**Fix round ${nextRound}/5**\n\n${summary}\n\n_No changes were made (all findings judged false-positive, or already addressed)._`;
-            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              ? `<!-- l4:fix-round:${nextRound} -->\n**Fix round ${nextRound}/5** - replied to each finding above; pushed a fix commit. Copilot will re-review automatically; the next poll picks up its result.`
+              : `<!-- l4:fix-round:${nextRound} -->\n**Fix round ${nextRound}/5** - replied to each finding above; no code changes were needed (all judged false-positive, or already addressed).`;
+            await github.rest.issues.createComment({ owner, repo, issue_number: pull_number, body });
