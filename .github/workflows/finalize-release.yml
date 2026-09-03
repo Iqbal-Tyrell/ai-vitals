@@ -99,9 +99,20 @@ jobs:
             const { owner, repo } = context.repo;
             const milestone_number = Number('${{ steps.meta.outputs.milestone_number }}');
             const bucket = '${{ steps.meta.outputs.bucket }}';
+            const version = '${{ steps.meta.outputs.version }}';
 
+            // Milestone titles must be unique even across closed
+            // milestones, so rename the cut one before closing it -
+            // otherwise creating a fresh "bucket"-titled milestone
+            // below fails with "already_exists".
             await github.rest.issues.updateMilestone({
-              owner, repo, milestone_number, state: 'closed',
+              owner, repo, milestone_number,
+              title: `${bucket} (${version})`,
+              state: 'closed',
+            });
+            await github.rest.issues.createMilestone({
+              owner, repo, title: bucket,
+              description: `Merged PRs labeled ${bucket.replace('next-', 'bump:')} land here until this bucket is cut as a release.`,
             });
             await github.rest.issues.createMilestone({
               owner, repo, title: bucket,
