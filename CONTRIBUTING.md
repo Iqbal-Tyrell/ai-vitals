@@ -12,6 +12,13 @@ the code yourself.
 - Four required status checks must pass: `test`, `analyse`, `cs-check`,
   `audit` (see below).
 - Merges are **squash-only**. Branches are auto-deleted after merge.
+- **AI coding assistants must always open a PR, never push directly
+  to `main`** — including for documentation-only changes. (Earlier L0
+  bootstrap commits landed directly, before this pipeline existed to
+  route them through; that precedent doesn't apply anymore now that
+  L4 is fully built.) Use reasonable judgment on granularity: fold a
+  set of small, related changes into one PR rather than opening a
+  separate PR per tiny commit.
 
 ## CI checks
 
