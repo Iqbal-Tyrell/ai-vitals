@@ -88,6 +88,18 @@ The bot identity throughout is the `ai-vitals-bot` GitHub App (not a
 personal account); AI reasoning runs via `copilot -p` (headless Copilot
 CLI), billed against the existing Copilot subscription seat.
 
+**No AI coding assistant (including one operating this repo via `gh`
+CLI on a human's authenticated session) may execute `gh pr merge`,
+`gh pr review --approve`, or any equivalent merge/approval action —
+even though such actions are technically indistinguishable, at the
+GitHub API level, from a human doing the same thing under the same
+credentials.** This can't be enforced by branch protection or any
+GitHub setting (a token can't tell who invoked it), so it's a hard
+behavioral rule: an AI assistant must always stop and ask the human to
+personally execute the merge/approval themselves (via the GitHub UI or
+by typing the command), and wait for their confirmation, rather than
+running it on their behalf.
+
 ## Releases (L5)
 
 Three permanently-open milestone buckets track pending release
