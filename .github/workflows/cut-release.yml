@@ -50,6 +50,25 @@ jobs:
             const { owner, repo } = context.repo;
             const bucket = '${{ inputs.bucket }}';
 
+            // Guard against duplicate cuts: if a release PR for this
+            // bucket is already open (from a prior cut not yet merged,
+            // or merged but not yet finalized), refuse to open another
+            // one - confirmed live that re-running otherwise computes
+            // the same version twice and duplicates the CHANGELOG entry.
+            const openPrs = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            const existingReleasePr = openPrs.find((p) =>
+              p.body && p.body.includes(`"bucket":"${bucket}"`) && p.body.includes('<!-- release-meta:')
+            );
+            if (existingReleasePr) {
+              core.setFailed(
+                `PR #${existingReleasePr.number} is already an open, unmerged release PR for "${bucket}". ` +
+                `Merge or close it before cutting another release from this bucket.`
+              );
+              return;
+            }
+
             const milestones = await github.paginate(github.rest.issues.listMilestones, {
               owner, repo, state: 'open', per_page: 100,
             });
@@ -95,6 +114,7 @@ jobs:
         run: |
           python3 << 'PYEOF'
           import json
+          import sys
           from datetime import date
 
           with open('/tmp/merged-prs.json') as f:
@@ -103,14 +123,21 @@ jobs:
           version = "${{ steps.version.outputs.version }}".lstrip('v')
           today = date.today().isoformat()
 
+          with open('CHANGELOG.md') as f:
+              content = f.read()
+
+          # Defense in depth alongside the open-PR guard above: refuse to
+          # duplicate an entry if this version somehow already has one
+          # (e.g. a prior cut's PR merged CHANGELOG but never got tagged).
+          if f"## [{version}]" in content:
+              print(f"CHANGELOG.md already has an entry for {version} - refusing to duplicate it.", file=sys.stderr)
+              sys.exit(1)
+
           entry_lines = [f"## [{version}] - {today}", ""]
           for pr in prs:
               entry_lines.append(f"- {pr['title']} (#{pr['number']})")
           entry_lines.append("")
           entry = "\n".join(entry_lines)
-
-          with open('CHANGELOG.md') as f:
-              content = f.read()
 
           marker = "## [Unreleased]"
           idx = content.index(marker) + len(marker)
