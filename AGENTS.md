@@ -197,16 +197,24 @@ CLI) and displays usage/cost analytics via Filament 4 (admin panel at
 ## Comment Discipline (mandatory, all file types)
 
 Inline comments (any language — PHP, YAML, JS, Blade, etc.) state what
-non-obvious code does right now. Required inline justifications for
-`mixed` types are exempt from the prohibition on design rationale. All
-other inline comments never narrate why a decision was made, alternatives
-considered, or historical/design context — that belongs in the commit
-message, PR description, or (when an OpenSpec change is active)
-`design.md`'s "Alternatives Considered" section.
+non-obvious code does right now, in present tense, without justifying
+it. Required inline justifications for `mixed` types (see Determinism
+Rules above) are exempt from this prohibition. Before finalizing any
+other comment block: count its lines, and check whether it explains
+why a decision was made, alternatives considered, or historical
+context. If either is true, delete it — that content belongs in the
+commit message, PR description, or (when an OpenSpec change is active)
+`design.md`'s "Alternatives Considered" section instead, never inline.
 
-Hard limit: no single comment block exceeds 3 lines. If an explanation
-needs more than that, it belongs in one of the places above instead of
-inline.
+- Allowed: `# Retries idempotent writes only; non-idempotent calls fail
+  fast.` (states current behavior, 1 line)
+- Not allowed: `# We chose to retry only idempotent writes because
+  non-idempotent calls could double-charge users if retried, and we
+  considered a distributed lock but rejected it as overkill here.`
+  (justifies a decision, narrates alternatives — delete and move to
+  the PR description)
+
+Hard limit: no single comment block exceeds 3 lines, with no exception.
 
 ### PHPDoc (exempt from the 3-line cap; own structure applies)
 
