@@ -1,0 +1,100 @@
+name: Finalize release
+
+# Reacts to the merge of a release PR opened by "Cut release (open
+# PR)" (identified by the <!-- release-meta: {...} --> marker in the
+# PR body). Tags the merge commit, creates the GitHub Release, and
+# closes the cut milestone bucket, reopening an empty one with the
+# same name for the next cycle.
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.body, '<!-- release-meta:')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Parse release metadata
+        id: meta
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const body = context.payload.pull_request.body || '';
+            const match = body.match(/<!-- release-meta: (.+?) -->/);
+            if (!match) {
+              core.setFailed('release-meta marker not found in PR body.');
+              return;
+            }
+            const meta = JSON.parse(match[1]);
+            core.setOutput('version', meta.version);
+            core.setOutput('bucket', meta.bucket);
+            core.setOutput('milestone_number', String(meta.milestoneNumber));
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ref: main
+          fetch-depth: 0
+
+      - name: Tag the release commit and push
+        run: |
+          git tag -a "${{ steps.meta.outputs.version }}" -m "Release ${{ steps.meta.outputs.version }}"
+          git push origin "${{ steps.meta.outputs.version }}"
+
+      - name: Gather release notes from the cut milestone
+        id: notes
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const milestone_number = Number('${{ steps.meta.outputs.milestone_number }}');
+            const prs = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, milestone: milestone_number, state: 'closed', per_page: 100,
+            });
+            const mergedPrs = prs.filter((p) => p.pull_request && p.pull_request.merged_at);
+            const fs = require('fs');
+            const body = mergedPrs.map((p) => `- ${p.title} (#${p.number})`).join('\n');
+            fs.writeFileSync('/tmp/release-notes.md', body);
+
+      - name: Create GitHub Release
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const body = fs.readFileSync('/tmp/release-notes.md', 'utf8');
+            await github.rest.repos.createRelease({
+              owner, repo,
+              tag_name: '${{ steps.meta.outputs.version }}',
+              name: '${{ steps.meta.outputs.version }}',
+              body,
+            });
+
+      - name: Close cut milestone and reopen empty bucket
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const milestone_number = Number('${{ steps.meta.outputs.milestone_number }}');
+            const bucket = '${{ steps.meta.outputs.bucket }}';
+
+            await github.rest.issues.updateMilestone({
+              owner, repo, milestone_number, state: 'closed',
+            });
+            await github.rest.issues.createMilestone({
+              owner, repo, title: bucket,
+              description: `Merged PRs labeled ${bucket.replace('next-', 'bump:')} land here until this bucket is cut as a release.`,
+            });

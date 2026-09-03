@@ -1,12 +1,15 @@
-name: Cut release
+name: Cut release (open PR)
 
-# Manually triggered: cuts a release from one of the three permanently-
-# open milestone buckets (next-patch/next-minor/next-major). Bumps
-# semver accordingly, writes a CHANGELOG.md entry (Keep a Changelog
-# format) from the bucket's merged PRs, tags the release, and reopens
-# the bucket empty for the next cycle. Cadence/automation mechanics
-# beyond this manual trigger are deferred (per plan) - a human decides
-# when to cut.
+# Manually triggered: prepares a release from one of the three
+# permanently-open milestone buckets (next-patch/next-minor/next-major)
+# and opens a PR with the CHANGELOG.md update. Does NOT push to main
+# directly - the App installation token is correctly blocked by branch
+# protection (confirmed live: "Protected branch update failed... 4 of 4
+# required status checks are expected"), same as any other change to
+# main. Tagging, the GitHub Release, and milestone rollover happen in
+# "Finalize release" once a human reviews and merges this PR - see that
+# workflow. Cadence/automation mechanics beyond this manual trigger are
+# deferred (per plan) - a human decides when to cut.
 
 on:
   workflow_dispatch:
@@ -21,10 +24,10 @@ on:
           - next-major
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  cut-release:
+  open-release-pr:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -117,7 +120,8 @@ jobs:
               f.write(new_content)
           PYEOF
 
-      - name: Configure bot git identity
+      - name: Configure bot git identity and branch
+        id: release-branch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -125,16 +129,17 @@ jobs:
           bot_id=$(gh api "/users/${slug}[bot]" --jq .id)
           git config user.name "${slug}[bot]"
           git config user.email "${bot_id}+${slug}[bot]@users.noreply.github.com"
+          branch="release/${{ steps.version.outputs.version }}"
+          git checkout -b "$branch"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
-      - name: Commit CHANGELOG, tag, and push
+      - name: Commit CHANGELOG and push to release branch
         run: |
           git add CHANGELOG.md
           git commit -m "Release ${{ steps.version.outputs.version }}"
-          git tag -a "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
-          git push origin main
-          git push origin "${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.release-branch.outputs.branch }}"
 
-      - name: Create GitHub Release
+      - name: Open release PR
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
@@ -142,28 +147,31 @@ jobs:
             const fs = require('fs');
             const { owner, repo } = context.repo;
             const prs = JSON.parse(fs.readFileSync('/tmp/merged-prs.json', 'utf8'));
-            const body = prs.map((p) => `- ${p.title} (#${p.number})`).join('\n');
+            const bullets = prs.map((p) => `- ${p.title} (#${p.number})`).join('\n');
 
-            await github.rest.repos.createRelease({
+            // Marker carries metadata "Finalize release" needs after merge
+            // (release_notes can't be re-derived once the milestone bucket
+            // is closed and reopened empty by this same finalize step).
+            const marker = JSON.stringify({
+              version: '${{ steps.version.outputs.version }}',
+              bucket: '${{ inputs.bucket }}',
+              milestoneNumber: Number('${{ steps.version.outputs.milestone_number }}'),
+            });
+
+            await github.rest.pulls.create({
               owner, repo,
-              tag_name: '${{ steps.version.outputs.version }}',
-              name: '${{ steps.version.outputs.version }}',
-              body,
-            });
-
-      - name: Close cut milestone and reopen empty bucket
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const { owner, repo } = context.repo;
-            const milestone_number = Number('${{ steps.version.outputs.milestone_number }}');
-            const bucket = '${{ inputs.bucket }}';
-
-            await github.rest.issues.updateMilestone({
-              owner, repo, milestone_number, state: 'closed',
-            });
-            await github.rest.issues.createMilestone({
-              owner, repo, title: bucket,
-              description: `Merged PRs labeled ${bucket.replace('next-', 'bump:')} land here until this bucket is cut as a release.`,
+              title: `Release ${{ steps.version.outputs.version }}`,
+              head: '${{ steps.release-branch.outputs.branch }}',
+              base: 'main',
+              body: [
+                `<!-- release-meta: ${marker} -->`,
+                `Automated CHANGELOG.md update for release ${{ steps.version.outputs.version }}.`,
+                '',
+                'Merging this PR (a human must approve and merge, same as any',
+                'other PR) triggers tagging, the GitHub Release, and milestone',
+                'rollover automatically - see the "Finalize release" workflow.',
+                '',
+                '## Included PRs',
+                bullets,
+              ].join('\n'),
             });
