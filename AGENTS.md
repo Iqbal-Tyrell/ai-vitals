@@ -194,7 +194,19 @@ CLI) and displays usage/cost analytics via Filament 4 (admin panel at
 - No implicit type coercion in aggregation math — cast to float/int at the
   parsing boundary.
 
-## Doc-Comment Policy (PHPDoc, mandatory)
+## Comment Discipline (mandatory, all file types)
+
+Inline comments (any language — PHP, YAML, JS, Blade, etc.) state what
+non-obvious code does right now. They never narrate why a decision was
+made, alternatives considered, or historical/design context — that
+belongs in the commit message, PR description, or (when an OpenSpec
+change is active) `design.md`'s "Alternatives Considered" section.
+
+Hard limit: no single comment block exceeds 3 lines. If an explanation
+needs more than that, it belongs in one of the places above instead of
+inline.
+
+### PHPDoc (exempt from the 3-line cap; own structure applies)
 
 Exactly one sentence describing purpose (not mechanism), one `@param`
 one-liner per parameter, `@return` always present, `@throws` only when the
