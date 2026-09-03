@@ -1,0 +1,8 @@
+# CodeRabbit configuration for ai-vitals.
+# https://docs.coderabbit.ai/getting-started/yaml-configuration
+
+reviews:
+  request_changes_workflow: true
+
+  auto_review:
+    enabled: true
