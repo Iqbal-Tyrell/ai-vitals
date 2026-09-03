@@ -1,0 +1,59 @@
+name: Milestone assignment
+
+# A merged PR's bump:* label directly determines which release bucket
+# it lands in - no separate inference step, no scanning/guessing from
+# mixed PR contents. Each bucket stays open permanently and only empties
+# out when its release is cut (see the release workflow).
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  assign-milestone:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const labels = context.payload.pull_request.labels.map((l) => l.name);
+
+            const bumpToMilestone = {
+              'bump:patch': 'next-patch',
+              'bump:minor': 'next-minor',
+              'bump:major': 'next-major',
+            };
+            const bumpLabel = labels.find((l) => bumpToMilestone[l]);
+            if (!bumpLabel) {
+              core.warning(`PR #${pull_number} merged with no bump:* label - skipping milestone assignment.`);
+              return;
+            }
+
+            const milestoneTitle = bumpToMilestone[bumpLabel];
+            const milestones = await github.paginate(github.rest.issues.listMilestones, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            const milestone = milestones.find((m) => m.title === milestoneTitle);
+            if (!milestone) {
+              core.setFailed(`Milestone "${milestoneTitle}" not found - was it deleted or renamed?`);
+              return;
+            }
+
+            await github.rest.issues.update({
+              owner, repo, issue_number: pull_number,
+              milestone: milestone.number,
+            });
+            core.info(`Assigned PR #${pull_number} to milestone "${milestoneTitle}" (from label "${bumpLabel}").`);

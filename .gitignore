@@ -23,6 +23,7 @@
 /database/*.sqlite*
 /vendor
 _ide_helper.php
+/.serena
 Homestead.json
 Homestead.yaml
 Thumbs.db

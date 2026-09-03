@@ -1,0 +1,169 @@
+name: Cut release
+
+# Manually triggered: cuts a release from one of the three permanently-
+# open milestone buckets (next-patch/next-minor/next-major). Bumps
+# semver accordingly, writes a CHANGELOG.md entry (Keep a Changelog
+# format) from the bucket's merged PRs, tags the release, and reopens
+# the bucket empty for the next cycle. Cadence/automation mechanics
+# beyond this manual trigger are deferred (per plan) - a human decides
+# when to cut.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bucket:
+        description: Which milestone bucket to cut
+        required: true
+        type: choice
+        options:
+          - next-patch
+          - next-minor
+          - next-major
+
+permissions:
+  contents: write
+
+jobs:
+  cut-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+
+      - name: Determine next version and gather merged PRs
+        id: version
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const bucket = '${{ inputs.bucket }}';
+
+            const milestones = await github.paginate(github.rest.issues.listMilestones, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            const milestone = milestones.find((m) => m.title === bucket);
+            if (!milestone) {
+              core.setFailed(`Milestone "${bucket}" not found.`);
+              return;
+            }
+
+            const prs = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, milestone: milestone.number, state: 'closed', per_page: 100,
+            });
+            const mergedPrs = prs.filter((p) => p.pull_request && p.pull_request.merged_at);
+            if (mergedPrs.length === 0) {
+              core.setFailed(`Milestone "${bucket}" has no merged PRs - nothing to release.`);
+              return;
+            }
+
+            const tags = await github.paginate(github.rest.repos.listTags, {
+              owner, repo, per_page: 100,
+            });
+            const semverTags = tags
+              .map((t) => t.name.match(/^v(\d+)\.(\d+)\.(\d+)$/))
+              .filter(Boolean)
+              .map((m) => [parseInt(m[1]), parseInt(m[2]), parseInt(m[3])])
+              .sort((a, b) => b[0] - a[0] || b[1] - a[1] || b[2] - a[2]);
+            let [major, minor, patch] = semverTags[0] || [0, 0, 0];
+
+            if (bucket === 'next-major') { major += 1; minor = 0; patch = 0; }
+            else if (bucket === 'next-minor') { minor += 1; patch = 0; }
+            else { patch += 1; }
+
+            const version = `v${major}.${minor}.${patch}`;
+            core.setOutput('version', version);
+            core.setOutput('milestone_number', String(milestone.number));
+
+            const fs = require('fs');
+            fs.writeFileSync('/tmp/merged-prs.json', JSON.stringify(
+              mergedPrs.map((p) => ({ number: p.number, title: p.title, url: p.html_url }))
+            ));
+
+      - name: Update CHANGELOG.md
+        run: |
+          python3 << 'PYEOF'
+          import json
+          from datetime import date
+
+          with open('/tmp/merged-prs.json') as f:
+              prs = json.load(f)
+
+          version = "${{ steps.version.outputs.version }}".lstrip('v')
+          today = date.today().isoformat()
+
+          entry_lines = [f"## [{version}] - {today}", ""]
+          for pr in prs:
+              entry_lines.append(f"- {pr['title']} (#{pr['number']})")
+          entry_lines.append("")
+          entry = "\n".join(entry_lines)
+
+          with open('CHANGELOG.md') as f:
+              content = f.read()
+
+          marker = "## [Unreleased]"
+          idx = content.index(marker) + len(marker)
+          new_content = content[:idx] + "\n\n" + entry + content[idx:].lstrip("\n")
+
+          with open('CHANGELOG.md', 'w') as f:
+              f.write(new_content)
+          PYEOF
+
+      - name: Configure bot git identity
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          slug="ai-vitals-bot"
+          bot_id=$(gh api "/users/${slug}[bot]" --jq .id)
+          git config user.name "${slug}[bot]"
+          git config user.email "${bot_id}+${slug}[bot]@users.noreply.github.com"
+
+      - name: Commit CHANGELOG, tag, and push
+        run: |
+          git add CHANGELOG.md
+          git commit -m "Release ${{ steps.version.outputs.version }}"
+          git tag -a "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
+          git push origin main
+          git push origin "${{ steps.version.outputs.version }}"
+
+      - name: Create GitHub Release
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const prs = JSON.parse(fs.readFileSync('/tmp/merged-prs.json', 'utf8'));
+            const body = prs.map((p) => `- ${p.title} (#${p.number})`).join('\n');
+
+            await github.rest.repos.createRelease({
+              owner, repo,
+              tag_name: '${{ steps.version.outputs.version }}',
+              name: '${{ steps.version.outputs.version }}',
+              body,
+            });
+
+      - name: Close cut milestone and reopen empty bucket
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const milestone_number = Number('${{ steps.version.outputs.milestone_number }}');
+            const bucket = '${{ inputs.bucket }}';
+
+            await github.rest.issues.updateMilestone({
+              owner, repo, milestone_number, state: 'closed',
+            });
+            await github.rest.issues.createMilestone({
+              owner, repo, title: bucket,
+              description: `Merged PRs labeled ${bucket.replace('next-', 'bump:')} land here until this bucket is cut as a release.`,
+            });
