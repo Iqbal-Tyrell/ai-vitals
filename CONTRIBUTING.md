@@ -59,7 +59,7 @@ Before adding one, check and be prepared to state:
 | `bump:patch` / `bump:minor` / `bump:major` | Which release bucket a merged PR lands in |
 | `ready-for-merge` | Review is clean; a human may click Merge |
 | `milestone-triage-pending` | Awaiting human approval for milestone triage |
-| `needs-review` | Awaiting Copilot or human code review |
+| `needs-review` | Awaiting CodeRabbit or human code review |
 | `needs-human-attention` | The L4 fix-loop hit its 5-round cap and escalated |
 | `bug` / `enhancement` / `documentation` | Baseline classification |
 
@@ -73,21 +73,29 @@ pipeline rather than direct commits:
    comment (thinking only, no code).
 3. Checking **Build** runs OpenSpec `propose -> apply` (using Laravel
    Boost's MCP server to see the app's real schema) and opens a PR.
-4. GitHub's native Copilot code review (Balanced effort, requested
-   automatically via a repo ruleset, re-runs on every push) reviews
-   the PR inline.
-5. A scheduled poller (every 10 minutes, or manually via
-   `workflow_dispatch`) checks unresolved Copilot review threads on
-   PRs carrying `needs-review` (polling because Copilot review runs
-   as an internal Actions workflow, so its events are subject to
+4. CodeRabbit (a genuinely separate GitHub App from `ai-vitals-bot`,
+   the PR author) reviews the PR automatically. With its Request
+   Changes Workflow enabled (`.coderabbit.yaml`, requires the paid
+   Essentials plan+), CodeRabbit submits a real `CHANGES_REQUESTED`
+   review when it has actionable comments, and a real `APPROVED`
+   review once all required threads are resolved and all Pre-Merge
+   Checks pass.
+5. `CHANGES_REQUESTED` (an ordinary external event, since CodeRabbit
+   is a real separate App - unlike GitHub's native Copilot code
+   review, which runs as an internal Actions workflow subject to
    GitHub's own GITHUB_TOKEN recursion-prevention rule and can't
-   trigger a listener directly). Unresolved findings start a
-   fix-and-re-review loop: a fresh `copilot -p` session verifies each
-   finding against the real code, fixes genuine issues or explains
-   false positives, replies directly to that finding's thread, and
-   resolves it. Capped at 5 rounds, then escalates via
-   `needs-human-attention`. Zero unresolved findings applies
-   `ready-for-merge`.
+   trigger a listener directly, confirmed via live testing) starts a
+   fix-and-re-review loop on PRs carrying `needs-review`: a fresh
+   `copilot -p` session verifies each open finding against the real
+   code, fixes genuine issues (or leaves false positives as-is), and
+   pushes. CodeRabbit re-reviews the new commit automatically and
+   resolves any threads the fix addressed on its own - the pipeline
+   never manually replies to or resolves CodeRabbit's threads. Capped
+   at 5 rounds, then escalates via `needs-human-attention`.
+   `APPROVED` applies `ready-for-merge`. Because CodeRabbit is a
+   separate identity from the PR author, its `APPROVED` review
+   satisfies this repo's required-approving-review branch protection
+   rule on its own.
 6. Only a human ever clicks **Merge** — no pipeline step holds
    merge-capable permissions.
 
