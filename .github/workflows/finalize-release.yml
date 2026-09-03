@@ -46,6 +46,15 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Configure bot git identity
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          slug="ai-vitals-bot"
+          bot_id=$(gh api "/users/${slug}[bot]" --jq .id)
+          git config user.name "${slug}[bot]"
+          git config user.email "${bot_id}+${slug}[bot]@users.noreply.github.com"
+
       - name: Tag the release commit and push
         run: |
           git tag -a "${{ steps.meta.outputs.version }}" -m "Release ${{ steps.meta.outputs.version }}"
