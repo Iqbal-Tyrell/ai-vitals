@@ -1,23 +1,5 @@
 name: CodeRabbit review fix-loop
 
-# Reacts to CodeRabbit's review submissions on PRs carrying needs-review.
-# Unlike GitHub's native Copilot code review (which runs as an internal
-# Actions workflow subject to GITHUB_TOKEN recursion-prevention, and so
-# could never trigger this kind of listener - confirmed via extensive
-# live testing), CodeRabbit is a genuinely separate, externally-installed
-# GitHub App: its review submissions are ordinary external events and
-# should fire pull_request_review normally.
-#
-# With CodeRabbit's "Request Changes Workflow" enabled (.coderabbit.yaml,
-# requires the paid Essentials plan+), CodeRabbit itself submits a real
-# CHANGES_REQUESTED review when it has actionable comments, and a real
-# APPROVED review once all required threads are resolved and all
-# Pre-Merge Checks pass - auto-resolving threads that later commits
-# address on its own. Because CodeRabbit is a separate identity from
-# ai-vitals-bot (the PR author), its APPROVED review satisfies this
-# repo's required-approving-review branch protection rule by itself.
-# The only action left for a human is clicking Merge.
-
 on:
   pull_request_review:
     types: [submitted]

@@ -2,17 +2,6 @@
 # https://docs.coderabbit.ai/getting-started/yaml-configuration
 
 reviews:
-  # Request Changes Workflow (Essentials plan+): CodeRabbit submits a real
-  # REQUEST_CHANGES review when it posts actionable inline comments, then
-  # auto-resolves threads that later commits address, and submits a real
-  # APPROVE review once all required threads are resolved, all Pre-Merge
-  # Checks pass, and the reviewed commit is still HEAD. Because CodeRabbit
-  # is a genuinely separate GitHub App from ai-vitals-bot (the PR author),
-  # its APPROVE satisfies this repo's required-approving-review branch
-  # protection rule on its own - the only remaining human action is
-  # clicking Merge.
-  #
-  # Requires the paid Essentials plan or above; has no effect on Free.
   request_changes_workflow: true
 
   auto_review:
