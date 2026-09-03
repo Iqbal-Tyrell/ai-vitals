@@ -197,10 +197,12 @@ CLI) and displays usage/cost analytics via Filament 4 (admin panel at
 ## Comment Discipline (mandatory, all file types)
 
 Inline comments (any language — PHP, YAML, JS, Blade, etc.) state what
-non-obvious code does right now. They never narrate why a decision was
-made, alternatives considered, or historical/design context — that
-belongs in the commit message, PR description, or (when an OpenSpec
-change is active) `design.md`'s "Alternatives Considered" section.
+non-obvious code does right now. Required inline justifications for
+`mixed` types are exempt from the prohibition on design rationale. All
+other inline comments never narrate why a decision was made, alternatives
+considered, or historical/design context — that belongs in the commit
+message, PR description, or (when an OpenSpec change is active)
+`design.md`'s "Alternatives Considered" section.
 
 Hard limit: no single comment block exceeds 3 lines. If an explanation
 needs more than that, it belongs in one of the places above instead of
