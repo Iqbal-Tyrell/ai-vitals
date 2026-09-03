@@ -114,7 +114,3 @@ jobs:
               owner, repo, title: bucket,
               description: `Merged PRs labeled ${bucket.replace('next-', 'bump:')} land here until this bucket is cut as a release.`,
             });
-            await github.rest.issues.createMilestone({
-              owner, repo, title: bucket,
-              description: `Merged PRs labeled ${bucket.replace('next-', 'bump:')} land here until this bucket is cut as a release.`,
-            });
