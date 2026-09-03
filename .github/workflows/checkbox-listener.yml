@@ -214,6 +214,7 @@ jobs:
           branch="l4/build-issue-${{ steps.detect.outputs.issue_number }}"
           git checkout -B "$branch"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "start_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Install Copilot CLI (Build)
         if: steps.detect.outputs.run_build == 'true'
@@ -233,11 +234,27 @@ jobs:
         if: steps.detect.outputs.run_build == 'true'
         id: build-commit
         run: |
-          if git diff --quiet && git diff --cached --quiet && [ -z "$(git status --porcelain)" ]; then
+          # Copilot may or may not have committed its own changes during
+          # the session above (confirmed live: it sometimes does) - check
+          # both uncommitted working-tree changes AND new local commits
+          # ahead of the branch's starting point, so either behavior is
+          # handled correctly.
+          working_tree_dirty=false
+          if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git status --porcelain)" ]; then
+            working_tree_dirty=true
+          fi
+          new_commits=false
+          if [ "$(git rev-parse HEAD)" != "${{ steps.build-setup.outputs.start_sha }}" ]; then
+            new_commits=true
+          fi
+
+          if [ "$working_tree_dirty" = "false" ] && [ "$new_commits" = "false" ]; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
-            git add -A
-            git commit -m "Build: issue #${{ steps.detect.outputs.issue_number }}"
+            if [ "$working_tree_dirty" = "true" ]; then
+              git add -A
+              git commit -m "Build: issue #${{ steps.detect.outputs.issue_number }}"
+            fi
             git push origin "${{ steps.build-setup.outputs.branch }}" --force
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
