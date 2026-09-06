@@ -1,0 +1,7 @@
+{
+  "name": "coderabbit-fix-loop-copilot-cli",
+  "private": true,
+  "dependencies": {
+    "@github/copilot": "1.0.83"
+  }
+}

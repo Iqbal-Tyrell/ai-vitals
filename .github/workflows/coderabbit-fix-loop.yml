@@ -47,11 +47,24 @@ jobs:
                     reviewThreads(first: 100, after: $after) {
                       pageInfo { hasNextPage endCursor }
                       nodes {
+                        id
                         isResolved
                         comments(first: 20) {
+                          pageInfo { hasNextPage endCursor }
                           nodes { databaseId author { login } path line body }
                         }
                       }
+                    }
+                  }
+                }
+              }`;
+            const commentPageQuery = `
+              query($id: ID!, $after: String) {
+                node(id: $id) {
+                  ... on PullRequestReviewThread {
+                    comments(first: 20, after: $after) {
+                      pageInfo { hasNextPage endCursor }
+                      nodes { databaseId author { login } path line body }
                     }
                   }
                 }
@@ -67,6 +80,20 @@ jobs:
               threads = threads.concat(pr.reviewThreads.nodes);
               hasNextPage = pr.reviewThreads.pageInfo.hasNextPage;
               after = pr.reviewThreads.pageInfo.endCursor;
+            }
+            // A thread with more than 20 comments needs its own follow-up
+            // pagination - the top-level query only fetches each thread's
+            // first page, so a later reply could otherwise go unseen.
+            for (const t of threads) {
+              let commentsAfter = t.comments.pageInfo.endCursor;
+              let commentsHasNext = t.comments.pageInfo.hasNextPage;
+              while (commentsHasNext) {
+                const page = await github.graphql(commentPageQuery, { id: t.id, after: commentsAfter });
+                const more = page.node.comments;
+                t.comments.nodes = t.comments.nodes.concat(more.nodes);
+                commentsHasNext = more.pageInfo.hasNextPage;
+                commentsAfter = more.pageInfo.endCursor;
+              }
             }
             const openFindings = threads.filter((t) => {
               const first = t.comments.nodes[0];
@@ -143,7 +170,9 @@ jobs:
 
       - name: Install Copilot CLI
         if: steps.check.outputs.open_count != '0' && fromJSON(steps.check.outputs.round) < 5
-        run: npm install -g @github/copilot@1.0.83
+        run: |
+          npm ci --prefix .github/copilot-cli
+          echo "$GITHUB_WORKSPACE/.github/copilot-cli/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Fix open findings
         if: steps.check.outputs.open_count != '0' && fromJSON(steps.check.outputs.round) < 5

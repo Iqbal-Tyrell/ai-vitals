@@ -70,7 +70,11 @@ thread's first comment's `author`, `path`, `line`, `body`. Add
 `databaseId` to that same selection - GraphQL's `databaseId` on a
 `PullRequestReviewComment` is exactly the numeric ID the REST reply
 endpoint (`POST .../pulls/{pr}/comments/{comment_id}/replies`) requires.
-No second API call is needed; this is a same-query field addition.
+No second API call is needed; this is a same-query field addition. A
+thread's comments connection is paginated (20 per page) with its own
+follow-up query per thread when a thread has more than 20 comments, so
+a prior reply late in a long thread is never missed by the
+`alreadyReplied` check described in decision 3.
 
 **3. New step: reply on each false-positive finding's own thread.**
 Runs after "Fix open findings" (Copilot has already written verdicts),
@@ -119,6 +123,14 @@ itself is about to address.
   thread's own comment history for an existing reply from this workflow's
   bot identity and flags it; the reply step skips any finding already
   carrying that flag, regardless of how many rounds have passed.
+- [Risk] Out of this change's original scope but flagged live on PR #17:
+  the fix-loop's `npm install -g @github/copilot@1.0.83` pins the direct
+  version but not its transitive tree (e.g. `detect-libc`), so a
+  compromised transitive release could still run with the job's
+  `COPILOT_GITHUB_TOKEN` and `--allow-all-tools`. → Mitigation: a
+  committed lockfile (`.github/copilot-cli/package-lock.json`) pins the
+  full resolved tree by integrity hash; the install step now runs
+  `npm ci --prefix .github/copilot-cli` instead.
 
 ## Migration Plan
 

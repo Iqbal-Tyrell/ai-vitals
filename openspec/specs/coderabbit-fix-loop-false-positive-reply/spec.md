@@ -68,6 +68,13 @@ NOT post a reply for findings verdicted `fixed`.
 - **THEN** the workflow does not post another reply for that finding,
   regardless of how many rounds have passed since
 
+#### Scenario: A thread has more than one page of comments
+- **WHEN** a finding's review thread has more comments than a single
+  GraphQL page returns
+- **THEN** the gather step fetches the thread's remaining comment pages
+  before deciding whether a prior reply from the fix-loop's bot identity
+  already exists
+
 ### Requirement: Fix-loop never resolves or approves threads itself
 The fix-loop SHALL NOT call any thread-resolve or PR-approval command or
 API (including `@coderabbitai resolve` and `@coderabbitai approve`) at
