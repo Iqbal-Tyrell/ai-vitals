@@ -81,9 +81,6 @@ jobs:
               hasNextPage = pr.reviewThreads.pageInfo.hasNextPage;
               after = pr.reviewThreads.pageInfo.endCursor;
             }
-            // A thread with more than 20 comments needs its own follow-up
-            // pagination - the top-level query only fetches each thread's
-            // first page, so a later reply could otherwise go unseen.
             for (const t of threads) {
               let commentsAfter = t.comments.pageInfo.endCursor;
               let commentsHasNext = t.comments.pageInfo.hasNextPage;
