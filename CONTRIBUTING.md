@@ -73,23 +73,38 @@ pipeline rather than direct commits:
    comment (thinking only, no code).
 3. Checking **Build** runs OpenSpec `propose -> apply` (using Laravel
    Boost's MCP server to see the app's real schema) and opens a PR.
-4. GitHub's native Copilot code review (Balanced effort, requested
-   automatically via a repo ruleset, re-runs on every push) reviews
-   the PR inline.
-5. A scheduled poller (every 10 minutes, or manually via
-   `workflow_dispatch`) checks unresolved Copilot review threads on
-   PRs carrying `needs-review` (polling because Copilot review runs
-   as an internal Actions workflow, so its events are subject to
-   GitHub's own GITHUB_TOKEN recursion-prevention rule and can't
-   trigger a listener directly). Unresolved findings start a
-   fix-and-re-review loop: a fresh `copilot -p` session verifies each
-   finding against the real code, fixes genuine issues or explains
-   false positives, replies directly to that finding's thread, and
-   resolves it. Capped at 5 rounds, then escalates via
-   `needs-human-attention`. Zero unresolved findings applies
-   `ready-for-merge`.
+4. CodeRabbit is the review engine for code-work PRs (config lives in
+   the CodeRabbit Dashboard, not a repo YAML file). It reviews
+   automatically once a PR leaves Draft, and again on every pushed
+   commit - no scheduled poller, no native Copilot review step.
+5. `coderabbit-fix-loop.yml` triggers on each CodeRabbit review
+   submission for PRs carrying `needs-review`. It gathers open review
+   threads via GraphQL, then a fresh `copilot -p` session verifies each
+   finding against the real code: genuine issues get fixed and pushed;
+   false positives get a reply on that finding's own thread explaining
+   why, and are otherwise left alone. The fix-loop never resolves or
+   approves a thread itself - only CodeRabbit's own subsequent
+   evaluation does that. Capped at 5 rounds, then escalates via
+   `needs-human-attention`. A clean review with zero open threads
+   applies `ready-for-merge`.
 6. Only a human ever clicks **Merge** — no pipeline step holds
    merge-capable permissions.
+
+**Manually triggering CodeRabbit is rare, not routine.** The pipeline
+is designed to resolve itself: pushing a genuine fix or posting a
+false-positive reply is what CodeRabbit's own automatic re-review
+reacts to - not a fresh manual command. Before posting `@coderabbitai
+full review` or `@coderabbitai review` on a PR:
+
+- Check `@coderabbitai rate limit` first - reviews are a scarce,
+  metered resource (as low as 1/hour on some plans), shared across
+  every PR in the org.
+- Prefer waiting for the automatic re-review a push or reply already
+  triggers over forcing a fresh one.
+- Only trigger manually when genuinely stalled (confirmed via the
+  rate-limit check and the PR's actual open-thread count) - never as a
+  reflexive "check if it's done yet" action, and never repeatedly
+  within the same short window.
 
 The bot identity throughout is the `ai-vitals-bot` GitHub App (not a
 personal account); AI reasoning runs via `copilot -p` (headless Copilot
