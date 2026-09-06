@@ -133,7 +133,7 @@ jobs:
 
       - name: Install Copilot CLI
         if: steps.check.outputs.open_count != '0' && fromJSON(steps.check.outputs.round) < 5
-        run: npm install -g @github/copilot
+        run: npm install -g @github/copilot@1.0.83
 
       - name: Fix open findings
         if: steps.check.outputs.open_count != '0' && fromJSON(steps.check.outputs.round) < 5
