@@ -21,6 +21,6 @@
 ## 4. Validate and test
 
 - [x] 4.1 Validate workflow YAML syntax after all edits
-- [ ] 4.2 Live-test on an open PR with a real, recurring false-positive finding (PR #17 currently has one) and confirm: a reply is posted on that exact finding's thread, containing Copilot's reasoning
-- [ ] 4.3 Confirm CodeRabbit's subsequent evaluation of that reply resolves the thread (or, if it doesn't, confirm the fix-loop itself made no further unilateral action)
-- [ ] 4.4 Confirm a genuinely fixed finding in the same round still receives no reply (only the pushed commit)
+- [x] 4.2 Live-test on an open PR with a real, recurring false-positive finding (PR #17 currently has one) and confirm: a reply is posted on that exact finding's thread, containing Copilot's reasoning
+- [x] 4.3 Confirm CodeRabbit's subsequent evaluation of that reply resolves the thread (or, if it doesn't, confirm the fix-loop itself made no further unilateral action)
+- [x] 4.4 Confirm a genuinely fixed finding in the same round still receives no reply (only the pushed commit)
