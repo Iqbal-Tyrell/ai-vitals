@@ -15,7 +15,6 @@ jobs:
   fix-on-changes-requested:
     if: >
       github.event.review.user.login == 'coderabbitai[bot]' &&
-      github.event.review.state == 'changes_requested' &&
       contains(github.event.pull_request.labels.*.name, 'needs-review') &&
       !contains(github.event.pull_request.labels.*.name, 'needs-human-attention')
     runs-on: ubuntu-latest
