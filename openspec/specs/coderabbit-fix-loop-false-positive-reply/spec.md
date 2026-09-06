@@ -62,6 +62,12 @@ NOT post a reply for findings verdicted `fixed`.
 - **THEN** the workflow skips posting any reply for that finding, and
   does not fail the job because of it
 
+#### Scenario: A finding's thread already carries this workflow's reply
+- **WHEN** a finding's own review thread already contains a reply
+  authored by the fix-loop's bot identity, from an earlier round
+- **THEN** the workflow does not post another reply for that finding,
+  regardless of how many rounds have passed since
+
 ### Requirement: Fix-loop never resolves or approves threads itself
 The fix-loop SHALL NOT call any thread-resolve or PR-approval command or
 API (including `@coderabbitai resolve` and `@coderabbitai approve`) at

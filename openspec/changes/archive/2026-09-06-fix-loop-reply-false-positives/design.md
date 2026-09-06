@@ -13,12 +13,13 @@ In practice this leaves no channel at all for a false-positive verdict
 to reach CodeRabbit. Only the pushed commit gets re-reviewed; a finding
 Copilot declines to touch (because it's a false positive) has no new
 commit to trigger re-evaluation, so CodeRabbit re-raises it on every
-subsequent full review. Confirmed live on PR #17: the same fork-PR
-finding was independently re-judged false-positive by Copilot in three
-separate rounds (3, 4, 5), and CodeRabbit kept re-flagging it until a
-human posted a plain inline reply directly on that thread - which
-CodeRabbit read and resolved within about a minute, with no other
-change to the code.
+subsequent full review. Confirmed live on PR #17: the same finding -
+about this workflow's own fork-PR checkout/push handling, unrelated to
+whether PR #17 itself is a fork PR (it is not) - was independently
+re-judged false-positive by Copilot in three separate rounds (3, 4, 5),
+and CodeRabbit kept re-flagging it until a human posted a plain inline
+reply directly on that thread - which CodeRabbit read and resolved
+within about a minute, with no other change to the code.
 
 CodeRabbit's own command reference confirms the mechanism: an inline
 reply scoped to one review thread applies only to that thread's finding
@@ -80,7 +81,12 @@ gated identically to the existing conditional steps
 `POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies`
 (Octokit: `pulls.createReplyForReviewComment`) with `comment_id` set to that
 ID. Uses the existing `app-token` (already
-scoped `pull-requests: write`); no new permission needed.
+scoped `pull-requests: write`); no new permission needed. A within-run
+`Set` alone cannot prevent a *later* round from replying again to the
+same still-unresolved thread, so the "Gather open findings" step also
+fetches each thread's later comments (not just the first) and flags
+`alreadyReplied` when one is already authored by this workflow's own bot
+identity; the reply step skips any finding carrying that flag.
 
 **4. No behavior change for "fixed" verdicts.**
 A genuine fix's pushed commit is what CodeRabbit re-reviews automatically;
@@ -107,17 +113,28 @@ itself is about to address.
   reply-spam. → Mitigation: exactly one reply per finding (never per
   round), each carrying real reasoning - matches normal human-reviewer
   conduct on a thread.
+- [Risk] A thread that stays unresolved across multiple rounds could get
+  a duplicate reply each round, since a within-run guard alone can't see
+  prior rounds' replies. → Mitigation: the gather step checks each
+  thread's own comment history for an existing reply from this workflow's
+  bot identity and flags it; the reply step skips any finding already
+  carrying that flag, regardless of how many rounds have passed.
 
 ## Migration Plan
 
 Implemented directly on `.github/workflows/coderabbit-fix-loop.yml`.
 Purely additive (new prompt section, one new GraphQL field, one new
-step) - no data migration, no state to roll back. Validate with YAML
-syntax check, then live-test on an open PR that already has a recurring
-false-positive finding (PR #17 currently has this exact scenario
-available). Rollback is deleting the one new step and the verdict-format
-prompt change - instantly returns to current behavior, same as the
-sync-step revert done earlier this session.
+step) - no data migration for the workflow code itself. Validate with
+YAML syntax check, then live-test on an open PR that already has a
+recurring false-positive finding (PR #17 currently has this exact
+scenario available). Rolling back the workflow code (deleting the one
+new step and the verdict-format prompt change) instantly stops any
+*future* replies, same as the sync-step revert done earlier this
+session - but it does not undo replies already posted, nor reopen any
+thread CodeRabbit already resolved because of one. Those are published
+review state on GitHub's side, independent of this repo's code; undoing
+them (deleting a reply, reopening a thread) is a separate, manual
+GitHub action if ever needed.
 
 ## Open Questions
 

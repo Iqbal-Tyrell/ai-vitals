@@ -48,7 +48,7 @@ jobs:
                       pageInfo { hasNextPage endCursor }
                       nodes {
                         isResolved
-                        comments(first: 1) {
+                        comments(first: 20) {
                           nodes { databaseId author { login } path line body }
                         }
                       }
@@ -97,7 +97,12 @@ jobs:
             }).join('\n\n'));
             fs.writeFileSync('/tmp/finding-ids.json', JSON.stringify(openFindings.map((t, i) => {
               const c = t.comments.nodes[0];
-              return { n: i + 1, databaseId: c.databaseId };
+              // A prior round may have already replied to this exact thread;
+              // skip re-posting rather than relying on a single-run guard.
+              const alreadyReplied = t.comments.nodes.slice(1).some((r) => (
+                r.author && (r.author.login === 'ai-vitals-bot' || r.author.login === 'ai-vitals-bot[bot]')
+              ));
+              return { n: i + 1, databaseId: c.databaseId, alreadyReplied };
             })));
 
       - name: Escalate (5-round cap reached)
@@ -177,12 +182,17 @@ jobs:
 
             const blockPattern = /^Finding\s+(\d+)\s*\r?\n\s*Verdict:\s*(fixed|false-positive)\s*\r?\n\s*Reason:[ \t]*(\S.*)$/gim;
             const idByN = new Map(ids.map((f) => [f.n, f.databaseId]));
+            const alreadyRepliedByN = new Map(ids.map((f) => [f.n, f.alreadyReplied]));
             const repliedTo = new Set();
             for (const match of summary.matchAll(blockPattern)) {
               const [, nStr, verdict, reason] = match;
               if (verdict.toLowerCase() !== 'false-positive') continue;
               const n = parseInt(nStr, 10);
               if (repliedTo.has(n)) continue;
+              if (alreadyRepliedByN.get(n)) {
+                core.info(`Finding ${nStr} already has a reply from a prior round; skipping.`);
+                continue;
+              }
               const comment_id = idByN.get(n);
               if (!comment_id) {
                 core.info(`No comment ID found for Finding ${nStr}; skipping reply.`);
