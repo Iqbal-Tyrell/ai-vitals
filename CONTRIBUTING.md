@@ -78,15 +78,17 @@ pipeline rather than direct commits:
    automatically once a PR leaves Draft, and again on every pushed
    commit - no scheduled poller, no native Copilot review step.
 5. `coderabbit-fix-loop.yml` triggers on each CodeRabbit review
-   submission for PRs carrying `needs-review`. It gathers open review
-   threads via GraphQL, then a fresh `copilot -p` session verifies each
-   finding against the real code: genuine issues get fixed and pushed;
-   false positives get a reply on that finding's own thread explaining
-   why, and are otherwise left alone. The fix-loop never resolves or
-   approves a thread itself - only CodeRabbit's own subsequent
-   evaluation does that. Capped at 5 rounds, then escalates via
-   `needs-human-attention`. A clean review with zero open threads
-   applies `ready-for-merge`.
+   submission for same-repository PRs (not forks) carrying
+   `needs-review`. It gathers open review threads via GraphQL, then a
+   fresh `copilot -p` session verifies each finding against the real
+   code: genuine issues get fixed and pushed; false positives get a
+   reply on that finding's own thread explaining why, and are otherwise
+   left alone. The fix-loop never resolves or approves a thread itself -
+   only CodeRabbit's own subsequent evaluation does that. Capped at 5
+   rounds, then escalates via `needs-human-attention`. An approved
+   review with zero open threads applies `ready-for-merge`, after first
+   confirming the approval's commit still matches the PR's current head
+   (an older, already-superseded approval is not enough).
 6. Only a human ever clicks **Merge** — no pipeline step holds
    merge-capable permissions.
 
