@@ -16,7 +16,8 @@ jobs:
     if: >
       github.event.review.user.login == 'coderabbitai[bot]' &&
       contains(github.event.pull_request.labels.*.name, 'needs-review') &&
-      !contains(github.event.pull_request.labels.*.name, 'needs-human-attention')
+      !contains(github.event.pull_request.labels.*.name, 'needs-human-attention') &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -27,8 +28,6 @@ jobs:
           permission-contents: write
           permission-issues: write
           permission-pull-requests: write
-          # Needed to push fixes that touch .github/workflows/**.
-          permission-workflows: write
 
       - name: Gather open findings and round count
         id: check
@@ -116,6 +115,8 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           ref: ${{ steps.check.outputs.head_ref }}
+          # Full history is needed so the next step's merge-base resolves.
+          fetch-depth: 0
           # Copilot below runs with --allow-all-tools; keeps the write-capable
           # token out of local git config until the push step re-authenticates.
           persist-credentials: false
@@ -123,11 +124,11 @@ jobs:
       - name: Sync instruction files from main
         if: steps.check.outputs.open_count != '0' && fromJSON(steps.check.outputs.round) < 5
         run: |
-          git fetch origin main --depth=1
-          merge_base=$(git merge-base HEAD origin/main || echo "")
+          git fetch origin main
+          merge_base=$(git merge-base HEAD origin/main)
           for f in AGENTS.md CONTRIBUTING.md; do
             [ -f "$f" ] || continue
-            if [ -z "$merge_base" ] || git diff --quiet "$merge_base" HEAD -- "$f"; then
+            if git diff --quiet "$merge_base" HEAD -- "$f"; then
               git show "origin/main:$f" > "$f" 2>/dev/null || true
             fi
           done
@@ -158,13 +159,24 @@ jobs:
             --no-ask-user \
             -s
 
+      - name: Create push token
+        if: steps.check.outputs.open_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: push-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+          # Only this token carries workflows:write, and only the push step uses it.
+          permission-workflows: write
+
       - name: Commit and push fix
         if: steps.check.outputs.open_count != '0' && fromJSON(steps.check.outputs.round) < 5
         id: commit
         env:
           HEAD_REF: ${{ steps.check.outputs.head_ref }}
-          # Re-authenticates for this push only, after Copilot has run.
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Uses the narrower push-scoped token instead of app-token.
+          GH_TOKEN: ${{ steps.push-token.outputs.token }}
         run: |
           # Copilot may commit its own changes, or leave the working tree
           # dirty, or both.
