@@ -77,10 +77,12 @@ pipeline rather than direct commits:
    the PR author) reviews the PR automatically. With its Request
    Changes Workflow enabled (via the CodeRabbit Dashboard - Repository
    settings for ai-vitals, not an in-repo config file; requires the
-   paid Essentials plan+), CodeRabbit submits a real `CHANGES_REQUESTED`
-   review when it has actionable comments, and a real `APPROVED`
-   review once all required threads are resolved and all Pre-Merge
-   Checks pass.
+   paid Essentials plan+, and only takes effect once any
+   organization-level CodeRabbit setting for this is disabled, since
+   org-level settings otherwise override the repository-level one),
+   CodeRabbit submits a real `CHANGES_REQUESTED` review when it has
+   actionable comments, and a real `APPROVED` review once all
+   required threads are resolved and all Pre-Merge Checks pass.
 5. `CHANGES_REQUESTED` (an ordinary external event, since CodeRabbit
    is a real separate App - unlike GitHub's native Copilot code
    review, which runs as an internal Actions workflow subject to
@@ -88,11 +90,15 @@ pipeline rather than direct commits:
    trigger a listener directly, confirmed via live testing) starts a
    fix-and-re-review loop on PRs carrying `needs-review`: a fresh
    `copilot -p` session verifies each open finding against the real
-   code, fixes genuine issues (or leaves false positives as-is), and
-   pushes. CodeRabbit re-reviews the new commit automatically and
-   resolves any threads the fix addressed on its own - the pipeline
-   never manually replies to or resolves CodeRabbit's threads. Capped
-   at 5 rounds, then escalates via `needs-human-attention`.
+   code, and fixes genuine issues (or leaves false positives as-is).
+   If that produced any change, it's pushed and CodeRabbit re-reviews
+   the new commit automatically and resolves any threads the fix
+   addressed on its own; if nothing changed (e.g. every finding was
+   judged a false positive), the pipeline instead asks CodeRabbit for
+   a fresh review via a `@coderabbitai full review` comment, since no
+   new commit exists to trigger one automatically. The pipeline never
+   manually replies to or resolves CodeRabbit's threads. Capped at 5
+   rounds, then escalates via `needs-human-attention`.
    `APPROVED` applies `ready-for-merge`. Because CodeRabbit is a
    separate identity from the PR author, its `APPROVED` review
    satisfies this repo's required-approving-review branch protection
