@@ -75,8 +75,9 @@ pipeline rather than direct commits:
    Boost's MCP server to see the app's real schema) and opens a PR.
 4. CodeRabbit (a genuinely separate GitHub App from `ai-vitals-bot`,
    the PR author) reviews the PR automatically. With its Request
-   Changes Workflow enabled (`.coderabbit.yaml`, requires the paid
-   Essentials plan+), CodeRabbit submits a real `CHANGES_REQUESTED`
+   Changes Workflow enabled (via the CodeRabbit Dashboard - Repository
+   settings for ai-vitals, not an in-repo config file; requires the
+   paid Essentials plan+), CodeRabbit submits a real `CHANGES_REQUESTED`
    review when it has actionable comments, and a real `APPROVED`
    review once all required threads are resolved and all Pre-Merge
    Checks pass.
