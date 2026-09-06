@@ -27,9 +27,7 @@ jobs:
           permission-contents: write
           permission-issues: write
           permission-pull-requests: write
-          # Fixes sometimes touch this very workflow file (as in this
-          # review round) - contents:write alone can't push changes under
-          # .github/workflows/, so this permission is also required.
+          # Needed to push fixes that touch .github/workflows/**.
           permission-workflows: write
 
       - name: Gather open findings and round count
@@ -82,10 +80,7 @@ jobs:
             });
             let round = 0;
             for (const c of comments) {
-              // Only the workflow's own bot identity can advance the round
-              // counter - otherwise any participant could post a
-              // "<!-- l4:fix-round:5 -->" comment to fake the cap or skip
-              // fix rounds entirely.
+              // Only counts round markers from the workflow's own bot identity.
               if (c.user.login !== 'ai-vitals-bot[bot]') continue;
               const m = c.body.match(/<!-- l4:fix-round:(\d+) -->/);
               if (m) round = Math.max(round, parseInt(m[1], 10));
@@ -121,11 +116,21 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           ref: ${{ steps.check.outputs.head_ref }}
-          # Do not leave the write-capable App token in local git config -
-          # the Copilot step below runs with --allow-all-tools and must not
-          # be able to reach it. The commit/push step re-authenticates
-          # explicitly, after Copilot has finished.
+          # Copilot below runs with --allow-all-tools; keeps the write-capable
+          # token out of local git config until the push step re-authenticates.
           persist-credentials: false
+
+      - name: Sync instruction files from main
+        if: steps.check.outputs.open_count != '0' && fromJSON(steps.check.outputs.round) < 5
+        run: |
+          git fetch origin main --depth=1
+          merge_base=$(git merge-base HEAD origin/main || echo "")
+          for f in AGENTS.md CONTRIBUTING.md; do
+            [ -f "$f" ] || continue
+            if [ -z "$merge_base" ] || git diff --quiet "$merge_base" HEAD -- "$f"; then
+              git show "origin/main:$f" > "$f" 2>/dev/null || true
+            fi
+          done
 
       - name: Configure bot git identity
         if: steps.check.outputs.open_count != '0' && fromJSON(steps.check.outputs.round) < 5
@@ -158,17 +163,11 @@ jobs:
         id: commit
         env:
           HEAD_REF: ${{ steps.check.outputs.head_ref }}
-          # Checkout ran with persist-credentials: false so that the
-          # Copilot step above (--allow-all-tools) never had access to a
-          # write-capable credential. Re-authenticate here, after Copilot
-          # has finished, for this push only.
+          # Re-authenticates for this push only, after Copilot has run.
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          # Copilot may or may not have committed its own changes during
-          # the session above - check both uncommitted working-tree
-          # changes AND new local commits ahead of the branch's starting
-          # point (confirmed live elsewhere in this pipeline that both
-          # behaviors occur).
+          # Copilot may commit its own changes, or leave the working tree
+          # dirty, or both.
           working_tree_dirty=false
           if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git status --porcelain)" ]; then
             working_tree_dirty=true
