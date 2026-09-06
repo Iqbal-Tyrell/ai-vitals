@@ -115,23 +115,9 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           ref: ${{ steps.check.outputs.head_ref }}
-          # Full history is needed so the next step's merge-base resolves.
-          fetch-depth: 0
           # Copilot below runs with --allow-all-tools; keeps the write-capable
           # token out of local git config until the push step re-authenticates.
           persist-credentials: false
-
-      - name: Sync instruction files from main
-        if: steps.check.outputs.open_count != '0' && fromJSON(steps.check.outputs.round) < 5
-        run: |
-          git fetch origin main
-          merge_base=$(git merge-base HEAD origin/main)
-          for f in AGENTS.md CONTRIBUTING.md; do
-            [ -f "$f" ] || continue
-            if git diff --quiet "$merge_base" HEAD -- "$f"; then
-              git show "origin/main:$f" > "$f" 2>/dev/null || true
-            fi
-          done
 
       - name: Configure bot git identity
         if: steps.check.outputs.open_count != '0' && fromJSON(steps.check.outputs.round) < 5
