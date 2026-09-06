@@ -52,7 +52,9 @@ jobs:
             const threads = pr.reviewThreads.nodes;
             const openFindings = threads.filter((t) => {
               const first = t.comments.nodes[0];
-              return !t.isResolved && first && first.author && first.author.login === 'coderabbitai[bot]';
+              // GraphQL's Bot author type omits the "[bot]" suffix REST
+              // uses; login here is "coderabbitai", not "coderabbitai[bot]".
+              return !t.isResolved && first && first.author && first.author.login === 'coderabbitai';
             });
 
             const comments = await github.paginate(github.rest.issues.listComments, {
