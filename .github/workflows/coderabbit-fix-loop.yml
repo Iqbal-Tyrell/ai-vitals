@@ -220,6 +220,7 @@ jobs:
           client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           permission-issues: write
+          permission-pull-requests: read
 
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
@@ -227,6 +228,11 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const issue_number = context.payload.pull_request.number;
+            const pr = await github.rest.pulls.get({ owner, repo, pull_number: issue_number });
+            if (pr.data.head.sha !== context.payload.review.commit_id) {
+              core.info('Ignoring approval for a stale pull request head.');
+              return;
+            }
             await github.rest.issues.addLabels({ owner, repo, issue_number, labels: ['ready-for-merge'] });
             for (const name of ['needs-review', 'needs-human-attention']) {
               try {
