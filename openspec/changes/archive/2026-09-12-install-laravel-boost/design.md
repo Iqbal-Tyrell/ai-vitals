@@ -42,3 +42,5 @@
   passes.
 - `php artisan test` (Pest via ParaTest) to confirm the full existing test
   suite still passes after the dependency addition.
+- `composer audit` to confirm the new dependency introduces no known
+  vulnerabilities.
