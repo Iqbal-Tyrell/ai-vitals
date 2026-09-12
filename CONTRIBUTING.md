@@ -81,10 +81,10 @@ rather than direct commits:
    watcher acting on a PR's behalf. Addressing findings, pushing
    fixes, and re-requesting review are all done by a human (optionally
    assisted by an interactive AI session) as ordinary PR work.
-5. Once satisfied, a human applies `ready-for-merge` and clicks
-   **Merge** themselves — no pipeline step holds merge-capable
-   permissions, and no automation applies this label on a human's
-   behalf.
+5. Once satisfied, a human removes `needs-review`, applies
+   `ready-for-merge`, and clicks **Merge** themselves — no pipeline
+   step holds merge-capable permissions, and no automation applies this
+   label on a human's behalf.
 
 **No AI coding assistant (including one operating this repo via `gh`
 CLI on a human's authenticated session) may execute `gh pr merge`,
