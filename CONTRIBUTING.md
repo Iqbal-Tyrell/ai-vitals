@@ -59,41 +59,32 @@ Before adding one, check and be prepared to state:
 | `bump:patch` / `bump:minor` / `bump:major` | Which release bucket a merged PR lands in |
 | `ready-for-merge` | Review is clean; a human may click Merge |
 | `milestone-triage-pending` | Awaiting human approval for milestone triage |
-| `needs-review` | Awaiting Copilot or human code review |
-| `needs-human-attention` | The L4 fix-loop hit its 5-round cap and escalated |
+| `needs-review` | PR is open and awaiting review |
+| `needs-human-attention` | Escalated for a human to look at directly |
 | `bug` / `enhancement` / `documentation` | Baseline classification |
 
 ## The AI-powered issue/PR pipeline (L4)
 
-Once bootstrapped, most feature work flows through an automated
-pipeline rather than direct commits:
+Once bootstrapped, most feature work flows through this pipeline
+rather than direct commits:
 
 1. An issue is opened and approved for milestone triage (checkbox).
 2. Checking **Plan** posts an OpenSpec `explore` writeup as an issue
    comment (thinking only, no code).
 3. Checking **Build** runs OpenSpec `propose -> apply` (using Laravel
-   Boost's MCP server to see the app's real schema) and opens a PR.
-4. GitHub's native Copilot code review (Balanced effort, requested
-   automatically via a repo ruleset, re-runs on every push) reviews
-   the PR inline.
-5. A scheduled poller (every 10 minutes, or manually via
-   `workflow_dispatch`) checks unresolved Copilot review threads on
-   PRs carrying `needs-review` (polling because Copilot review runs
-   as an internal Actions workflow, so its events are subject to
-   GitHub's own GITHUB_TOKEN recursion-prevention rule and can't
-   trigger a listener directly). Unresolved findings start a
-   fix-and-re-review loop: a fresh `copilot -p` session verifies each
-   finding against the real code, fixes genuine issues or explains
-   false positives, replies directly to that finding's thread, and
-   resolves it. Capped at 5 rounds, then escalates via
-   `needs-human-attention`. Zero unresolved findings applies
-   `ready-for-merge`.
-6. Only a human ever clicks **Merge** — no pipeline step holds
-   merge-capable permissions.
-
-The bot identity throughout is the `ai-vitals-bot` GitHub App (not a
-personal account); AI reasoning runs via `copilot -p` (headless Copilot
-CLI), billed against the existing Copilot subscription seat.
+   Boost's MCP server to see the app's real schema) and opens a PR,
+   carrying `needs-review`.
+4. **Code review is manual, not automated.** A human decides when a
+   PR is ready and triggers CodeRabbit themselves (e.g. posting
+   `@coderabbitai review` as a PR comment, or via the CodeRabbit
+   Dashboard) — there is no scheduled poller, fix-loop, or other
+   watcher acting on a PR's behalf. Addressing findings, pushing
+   fixes, and re-requesting review are all done by a human (optionally
+   assisted by an interactive AI session) as ordinary PR work.
+5. Once satisfied, a human removes `needs-review`, applies
+   `ready-for-merge`, and clicks **Merge** themselves — no pipeline
+   step holds merge-capable permissions, and no automation applies this
+   label on a human's behalf.
 
 **No AI coding assistant (including one operating this repo via `gh`
 CLI on a human's authenticated session) may execute `gh pr merge`,
