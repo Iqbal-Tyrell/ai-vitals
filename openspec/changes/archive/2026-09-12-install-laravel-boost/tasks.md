@@ -9,5 +9,6 @@
       provider plugin contract, determinism rules, doc-comment policy,
       architecture layering) are preserved/re-added if Boost's generated
       file doesn't already retain them.
-- [x] 4. Run `vendor/bin/pint --dirty`, `vendor/bin/phpstan analyse`, and
-      `php artisan test` to confirm the change is clean and passing.
+- [x] 4. Run `vendor/bin/pint --dirty`, `vendor/bin/phpstan analyse`,
+      `php artisan test`, and `composer audit` to confirm the change is
+      clean, passing, and introduces no known vulnerabilities.
